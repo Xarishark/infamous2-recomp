@@ -12,6 +12,32 @@ own disc and title update; the result stays on your machine.
 
 Target: **BCUS98125** (North America), **title update 1.04**.
 
+## Screenshots
+
+Captured from the port running on Windows (2560x1080 monitor); cropped and resized only.
+
+![Cole firing a lightning bolt on the New Marais pier, true ultrawide](docs/images/gameplay-ultrawide-bolt.jpg)
+*True ultrawide (Hor+, 64:27) in borderless fullscreen at 2560x1080: Cole firing a bolt on the New Marais pier, HUD spread to the screen edges.*
+
+![The New Marais pier and waterfront, ultrawide](docs/images/new-marais-pier-ultrawide.jpg)
+*New Marais from the pier, right after the boat ride (ultrawide).*
+
+![The same cutscene frame at stock 16:9 and at ultrawide](docs/images/compare-16x9-vs-ultrawide.jpg)
+*The same cutscene frame: stock 16:9 (`aspect = off`, top) and Hor+ ultrawide (`aspect = auto`, bottom) -- same vertical view, more at the sides.*
+
+| | |
+|---|---|
+| ![The game's pause menu with PC Settings and Quit Game](docs/images/pause-menu-pc-settings.jpg) | ![PC Settings: Display](docs/images/pc-settings-display.jpg) |
+| *The game's own pause menu gains **PC Settings** and **Quit Game**.* | *PC Settings, Display: window mode, aspect ratio (field of view), HUD layout, LOD, movies.* |
+| ![PC Settings: Graphics](docs/images/pc-settings-graphics.jpg) | ![PC Settings: Controls](docs/images/pc-settings-controls.jpg) |
+| *Graphics: preset, brightness, anti-aliasing, sharpening, AF, texture packs, shadow filtering, internal resolution, upscaling.* | *Controls: mouse sensitivity, stick deadzones, vibration.* |
+| ![The F1 options overlay, Frame tab](docs/images/options-overlay-frame.jpg) | ![The window's Load menu with save-state slots](docs/images/window-menu-load-slots.jpg) |
+| *The F1 options overlay (Frame tab: frame-rate limit, vsync, VRR, frame pacing, FPS counter), windowed with the FPS counter on.* | *The window's **Load** menu: save-state slots labelled with time, mission and play time.* |
+
+<img src="docs/images/launcher-game-files.png" alt="Launcher: your game files" width="560">
+
+*The launcher's first-run game-files screen. After that it checks the build tools, builds, and starts the game.*
+
 ## Features
 
 - **The PS3 game, natively on PC:** the game's own saves (in the PS3 format: they copy to and from
