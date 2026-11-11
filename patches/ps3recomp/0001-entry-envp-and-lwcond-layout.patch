@@ -655,7 +655,7 @@ index 0000000..dd1d9b0
 +#endif
 +#endif /* PS3EMU_PLAY_ISSUES_H */
 diff --git a/libs/audio/cellAudio.c b/libs/audio/cellAudio.c
-index b51fb7c..10c2f18 100644
+index b51fb7c..e009ef5 100644
 --- a/libs/audio/cellAudio.c
 +++ b/libs/audio/cellAudio.c
 @@ -15,6 +15,11 @@
@@ -718,7 +718,36 @@ index b51fb7c..10c2f18 100644
  #endif /* AUDIO_BACKEND_SDL2 */
  
  #if AUDIO_BACKEND_WASAPI
-@@ -387,6 +412,22 @@ static void audio_backend_wait(void)
+@@ -278,14 +303,17 @@ static int audio_backend_init(void)
+     wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+     wfx.cbSize          = 0;
+ 
+-    /* Request event-driven mode with a ~20ms buffer */
++    /* Request event-driven mode with a ~20ms buffer. The device's own mix format may differ (44.1/96/192 kHz,
++     * 5.1/7.1): without AUTOCONVERTPCM shared mode then refuses the stream with AUDCLNT_E_UNSUPPORTED_FORMAT
++     * (0x88890008) and the game runs silent; with it, Windows converts. */
+     REFERENCE_TIME buf_duration = 200000; /* 20ms in 100ns units */
++    const DWORD convert = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+     s_wasapi_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+ 
+     hr = s_wasapi_client->lpVtbl->Initialize(
+         s_wasapi_client,
+         AUDCLNT_SHAREMODE_SHARED,
+-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
++        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | convert,
+         buf_duration, 0, &wfx, NULL);
+ 
+     if (FAILED(hr)) {
+@@ -293,7 +321,7 @@ static int audio_backend_init(void)
+         hr = s_wasapi_client->lpVtbl->Initialize(
+             s_wasapi_client,
+             AUDCLNT_SHAREMODE_SHARED,
+-            0, buf_duration, 0, &wfx, NULL);
++            convert, buf_duration, 0, &wfx, NULL);
+         if (FAILED(hr)) {
+             printf("[cellAudio] WASAPI Initialize failed: 0x%08lX\n", hr);
+             s_wasapi_client->lpVtbl->Release(s_wasapi_client);
+@@ -387,6 +415,22 @@ static void audio_backend_wait(void)
      else Sleep(1);
  }
  
@@ -741,7 +770,7 @@ index b51fb7c..10c2f18 100644
  
  #endif /* AUDIO_BACKEND_WASAPI */
  
-@@ -508,11 +549,69 @@ static void audio_mix_one_block(void)
+@@ -508,11 +552,69 @@ static void audio_mix_one_block(void)
  
      mutex_unlock(&s_audio_mutex);
  
@@ -811,7 +840,7 @@ index b51fb7c..10c2f18 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -534,10 +633,39 @@ static void audio_notify_event_queues(void)
+@@ -534,10 +636,39 @@ static void audio_notify_event_queues(void)
      }
  }
  
@@ -851,7 +880,7 @@ index b51fb7c..10c2f18 100644
      printf("[cellAudio] Mixing thread started\n");
  
      /* Pace to the device clock. The PS3 consumes one block every 5.33 ms;
-@@ -548,7 +676,9 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -548,7 +679,9 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
       * With no device, pace on the performance counter instead. */
      LARGE_INTEGER qf, q0; QueryPerformanceFrequency(&qf); QueryPerformanceCounter(&q0);
      unsigned long long blocks = 0;
@@ -861,7 +890,7 @@ index b51fb7c..10c2f18 100644
          const int room = audio_backend_room();
          if (room >= 0 && room < CELL_AUDIO_BLOCK_SAMPLES) { audio_backend_wait(); continue; }
          if (room < 0) {
-@@ -599,6 +729,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
+@@ -599,6 +732,7 @@ static unsigned __stdcall audio_mix_thread_func(void* arg)
          audio_notify_event_queues();
      }
  
@@ -869,7 +898,7 @@ index b51fb7c..10c2f18 100644
      printf("[cellAudio] Mixing thread stopped\n");
      return 0;
  }
-@@ -608,7 +739,9 @@ static void* audio_mix_thread_func(void* arg)
+@@ -608,7 +742,9 @@ static void* audio_mix_thread_func(void* arg)
      (void)arg;
      printf("[cellAudio] Mixing thread started\n");
  
@@ -879,7 +908,7 @@ index b51fb7c..10c2f18 100644
          audio_mix_one_block();
          audio_backend_submit(s_mix_buffer, CELL_AUDIO_BLOCK_SAMPLES);
          audio_notify_event_queues();
-@@ -621,6 +754,7 @@ static void* audio_mix_thread_func(void* arg)
+@@ -621,6 +757,7 @@ static void* audio_mix_thread_func(void* arg)
          }
      }
  
@@ -887,7 +916,7 @@ index b51fb7c..10c2f18 100644
      printf("[cellAudio] Mixing thread stopped\n");
      return NULL;
  }
-@@ -674,6 +808,53 @@ static void audio_stop_mix_thread(void)
+@@ -674,6 +811,53 @@ static void audio_stop_mix_thread(void)
   * API implementations
   * -----------------------------------------------------------------------*/
  
@@ -941,7 +970,7 @@ index b51fb7c..10c2f18 100644
  s32 cellAudioInit(void)
  {
      /* PS3_NO_AUDIO=1: report that the audio library is unavailable. Middleware
-@@ -689,28 +870,17 @@ s32 cellAudioInit(void)
+@@ -689,28 +873,17 @@ s32 cellAudioInit(void)
      if (s_audio_initialized)
          return CELL_AUDIO_ERROR_ALREADY_INIT;
  
@@ -978,7 +1007,7 @@ index b51fb7c..10c2f18 100644
  
      s_audio_initialized = 1;
      return CELL_OK;
-@@ -735,6 +905,7 @@ s32 cellAudioQuit(void)
+@@ -735,6 +908,7 @@ s32 cellAudioQuit(void)
      }
  
      mutex_destroy(&s_audio_mutex);
@@ -986,7 +1015,7 @@ index b51fb7c..10c2f18 100644
      s_audio_initialized = 0;
      return CELL_OK;
  }
-@@ -798,8 +969,8 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
+@@ -798,8 +972,8 @@ s32 cellAudioPortOpen(const CellAudioPortParam* param, u32* portNum)
      /* Keep audio outside sys_memory (0x40000000..0x50000000), the HLE heap
       * (0x50000000..0x58000000), and sys_vm (0x60000000..0x70000000).
       * Reserve two 1-MB pages per port so reopening reuses its own storage. */
@@ -997,7 +1026,7 @@ index b51fb7c..10c2f18 100644
      if (vm_commit(guest_buf, 0x200000u) != CELL_OK) {
          port->in_use = 0;
          mutex_unlock(&s_audio_mutex);
-@@ -967,8 +1138,7 @@ s32 cellAudioCreateNotifyEventQueue(u32* id, u64* key)
+@@ -967,8 +1141,7 @@ s32 cellAudioCreateNotifyEventQueue(u32* id, u64* key)
      /* A distinct key per queue: the notify path resolves queues BY KEY, and the
       * game creates its other queues with key 0, so reusing 0 here would make
       * find_queue_by_key ambiguous and post audio events to whichever matched. */
@@ -1007,7 +1036,7 @@ index b51fb7c..10c2f18 100644
  
      uint32_t qid = sys_event_queue_create_direct(k, 8);
      if (!qid)
-@@ -1117,3 +1287,170 @@ s32 cellAudioUnsetPersonalDevice(s32 iPersonalStream)
+@@ -1117,3 +1290,170 @@ s32 cellAudioUnsetPersonalDevice(s32 iPersonalStream)
      printf("[cellAudio] UnsetPersonalDevice(stream=%d) - stub\n", iPersonalStream);
      return CELL_OK;
  }
@@ -15614,7 +15643,7 @@ index 0000000..e667ab0
 +#endif
 diff --git a/libs/input/tests/test_pad_host.c b/libs/input/tests/test_pad_host.c
 new file mode 100644
-index 0000000..316ea6b
+index 0000000..1016d21
 --- /dev/null
 +++ b/libs/input/tests/test_pad_host.c
 @@ -0,0 +1,1512 @@
@@ -26019,7 +26048,7 @@ index 0000000..c1126c0
 +    return g_fail ? 1 : 0;
 +}
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
-index cdb0464..38fac23 100644
+index cdb0464..020ff91 100644
 --- a/libs/video/cellGcmSys.c
 +++ b/libs/video/cellGcmSys.c
 @@ -14,8 +14,15 @@
@@ -33839,7 +33868,7 @@ index bd655fe..89bd406 100644
  }
  #endif
 diff --git a/libs/video/rsx_d3d12_backend.c b/libs/video/rsx_d3d12_backend.c
-index 68929ed..b41602a 100644
+index 68929ed..631c90d 100644
 --- a/libs/video/rsx_d3d12_backend.c
 +++ b/libs/video/rsx_d3d12_backend.c
 @@ -21,6 +21,7 @@
@@ -65379,7 +65408,7 @@ index 0000000..00f8dd9
 +#endif /* PS3RECOMP_RSX_TEXPACK_H */
 diff --git a/libs/video/rsx_texpack_io.h b/libs/video/rsx_texpack_io.h
 new file mode 100644
-index 0000000..f1b9af2
+index 0000000..9bf2b6a
 --- /dev/null
 +++ b/libs/video/rsx_texpack_io.h
 @@ -0,0 +1,398 @@
@@ -86954,7 +86983,7 @@ index 0000000..4ef68d1
 +}
 diff --git a/libs/video/tests/test_ztex_pcf.c b/libs/video/tests/test_ztex_pcf.c
 new file mode 100644
-index 0000000..c78a63b
+index 0000000..b1d61d3
 --- /dev/null
 +++ b/libs/video/tests/test_ztex_pcf.c
 @@ -0,0 +1,784 @@
@@ -105928,7 +105957,7 @@ index 0000000..911050b
 +SS_SECTION_REGISTER(k_time_ops)
 diff --git a/runtime/savestate/ss_state.h b/runtime/savestate/ss_state.h
 new file mode 100644
-index 0000000..d3d7338
+index 0000000..bee3e7e
 --- /dev/null
 +++ b/runtime/savestate/ss_state.h
 @@ -0,0 +1,637 @@
@@ -110556,7 +110585,7 @@ index 0000000..3ff9a6c
 +}
 diff --git a/runtime/savestate/tests/test_ss_libs.c b/runtime/savestate/tests/test_ss_libs.c
 new file mode 100644
-index 0000000..24fdd30
+index 0000000..1dd1fd7
 --- /dev/null
 +++ b/runtime/savestate/tests/test_ss_libs.c
 @@ -0,0 +1,493 @@
@@ -132429,7 +132458,7 @@ index 0000000..6b10ce9
 +merge_with_controller = 1
 diff --git a/test_cellpad_host.stdout.txt b/test_cellpad_host.stdout.txt
 new file mode 100644
-index 0000000..e82efec
+index 0000000..59e55c9
 --- /dev/null
 +++ b/test_cellpad_host.stdout.txt
 @@ -0,0 +1,52 @@

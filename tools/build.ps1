@@ -161,13 +161,34 @@ $optline = ($opts | ForEach-Object { "`"$_`"" }) -join " "
 
 Step "build (long: the lifted code is huge)"
 $cl  = $clang -replace '\\', '/'
+# The icon resource is compiled with LLVM's llvm-rc (next to clang-cl) rather than the Windows SDK's rc.exe, which
+# stops with "RC1107: invalid usage" on some setups (issues #2, #5).
+$llvmrc = Join-Path (Split-Path $clang) "llvm-rc.exe"
+$rcopt = if (Test-Path $llvmrc) { "-DCMAKE_RC_COMPILER=" + ($llvmrc -replace '\\', '/') } else { "" }
+# A build directory configured elsewhere (the folder was moved or copied) or with another resource compiler keeps
+# stale paths and settings in its cache: drop the cache so CMake configures it afresh (objects are rebuilt as needed;
+# nothing else in build\ is touched).
+$cache = "build\CMakeCache.txt"
+if (Test-Path $cache) {
+    $home_ = (Select-String -Path $cache -Pattern '^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$' | Select-Object -First 1)
+    $rcnow = (Select-String -Path $cache -Pattern '^CMAKE_RC_COMPILER:FILEPATH=(.*)$' | Select-Object -First 1)
+    $here  = (Get-Location).Path -replace '\\', '/'
+    $moved = $home_ -and ($home_.Matches[0].Groups[1].Value.TrimEnd('/') -ne $here.TrimEnd('/'))
+    $rcchg = $rcopt -and -not ($rcnow -and ($rcnow.Matches[0].Groups[1].Value -ieq ($llvmrc -replace '\\', '/')))
+    if ($moved -or $rcchg) {
+        if ($moved) { Write-Host "the folder moved: configuring the build directory again" }
+        else { Write-Host "switching the resource compiler to llvm-rc: configuring the build directory again" }
+        Remove-Item $cache -Force
+        Remove-Item "build\CMakeFiles" -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 $bat = Join-Path $env:TEMP "infamous2_build_$PID.bat"     # per process: two builds never share it
 # Paths and options reach the batch file as environment variables, not as its text: the file is ASCII (cmd reads
 # it in the console code page), so a path with a letter outside ASCII written into it would arrive as '?'.
 # cmd expands %VAR% from the (Unicode) environment unchanged.
 $env:IF2_BUILD_VCVARS = $vcvars
 $env:IF2_BUILD_CC = $cl
-$env:IF2_BUILD_OPTS = $optline
+$env:IF2_BUILD_OPTS = ($optline + " " + $(if ($rcopt) { "`"$rcopt`"" } else { "" })).Trim()
 @"
 @echo off
 call "%IF2_BUILD_VCVARS%" >nul || exit /b 1
