@@ -83,6 +83,8 @@ compile_commands.json
 /inFamous2Launcher.exe
 /inFamous2Launcher.pdb
 .launcher/
+# the release zip's file list (tools/make_release.ps1 writes it into the zip only)
+/release-files.txt
 
 # ---- Tooling ---------------------------------------------------------------
 __pycache__/

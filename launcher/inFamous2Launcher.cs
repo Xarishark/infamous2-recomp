@@ -6,25 +6,36 @@
 // lift, libsre, jobs, build -- and starts the game the way tools\run.ps1 does once the build succeeds.
 // Later runs: Play when the build is up to date with the sources, the toolkit pin and patch, and your files.
 //
-// It contains no game code and downloads nothing by itself (setup.ps1 clones the ps3recomp toolkit from
-// GitHub; winget installs only what you confirm). Build it with tools\build_launcher.cmd (the .NET Framework's
-// own csc.exe, C# 5). Every path is relative to the folder the launcher sits in.
+// It contains no game code (setup.ps1 clones the ps3recomp toolkit from GitHub; winget installs only what you
+// confirm). At startup it asks GitHub, in the background, whether a newer release of this port exists (one
+// request to api.github.com; nothing about the player is sent) and offers it; it downloads a release only when
+// the player presses Update now. Build it with tools\build_launcher.cmd (the .NET Framework's own csc.exe, C# 5).
+// Every path is relative to the folder the launcher sits in.
 //
 // Command line (all optional; for shortcuts and scripted tests):
 //   --disc <dir> --update <dir> --eboot <EBOOT.elf> --libsre <libsre.prx | RPCS3 folder>   prefill the files dialog
 //   --detect-out <file>     write the prerequisite / game-file / build-state report to <file> and exit
+//   --update-check-out <file>  ask GitHub for the latest release, write what was understood to <file> and exit
 //   --winget-dry-run        Install buttons log the winget command instead of running it
 //   --pretend-missing <ids> show these prerequisites as missing (git,python,cmake,ninja,vs,llvm): UI tests
+// Used by the update itself: --apply-update <plan> (the updater: a temp copy of this exe), --updated <old version>,
+// --update-failed, --update-log <file> (the restarted launcher).
+// Environment: INF2L_NO_UPDATE_CHECK=1 turns the startup check off. For tests only: INF2L_UPDATE_API=<url> asks
+// that URL instead of the GitHub API (and then allows downloads from anywhere it names), INF2L_UPDATE_TEST_FAIL=
+// <release-relative path> makes the updater fail right after writing that file (to exercise the undo).
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -33,15 +44,27 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyProduct("infamous2-recomp")]
 [assembly: System.Reflection.AssemblyDescription("Builds and starts the inFamous 2 static recompilation from your own game files")]
 [assembly: System.Reflection.AssemblyCopyright("bhuiyah and infamous2-recomp contributors, MIT")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion(Infamous2Launcher.AppInfo.Version + ".0")]
+[assembly: System.Reflection.AssemblyFileVersion(Infamous2Launcher.AppInfo.Version + ".0")]
+[assembly: System.Reflection.AssemblyInformationalVersion(Infamous2Launcher.AppInfo.Version)]
 
 namespace Infamous2Launcher
 {
+    static class AppInfo
+    {
+        // The release this launcher belongs to: tools\make_release.ps1 refuses a tag that does not match it.
+        public const string Version = "0.1.2";
+        public const string Repo = "bhuiyah/infamous2-recomp";
+        public const string ApiLatest = "https://api.github.com/repos/" + Repo + "/releases/latest";
+        public const string ReleasesPage = "https://github.com/" + Repo + "/releases";
+        public static string UserAgent { get { return "inFamous2Recomp-launcher/" + Version; } }
+    }
+
     // ------------------------------------------------------------------ options
     class Options
     {
-        public string Disc, Update, Eboot, Libsre, DetectOut;
-        public bool WingetDryRun;
+        public string Disc, Update, Eboot, Libsre, DetectOut, UpdateCheckOut, ApplyUpdate, Updated, UpdateLog;
+        public bool WingetDryRun, UpdateFailed;
         public HashSet<string> PretendMissing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public static Options Parse(string[] a)
@@ -56,6 +79,11 @@ namespace Infamous2Launcher
                 else if (k == "--eboot") o.Eboot = next();
                 else if (k == "--libsre") o.Libsre = next();
                 else if (k == "--detect-out") o.DetectOut = next();
+                else if (k == "--update-check-out") o.UpdateCheckOut = next();
+                else if (k == "--apply-update") o.ApplyUpdate = next();
+                else if (k == "--updated") o.Updated = next();
+                else if (k == "--update-log") o.UpdateLog = next();
+                else if (k == "--update-failed") o.UpdateFailed = true;
                 else if (k == "--winget-dry-run") o.WingetDryRun = true;
                 else if (k == "--pretend-missing")
                     foreach (var s in next().Split(',')) if (s.Trim().Length > 0) o.PretendMissing.Add(s.Trim());
@@ -77,7 +105,7 @@ namespace Infamous2Launcher
         {
             using (var h = SHA1.Create()) return Hex(h.ComputeHash(Encoding.UTF8.GetBytes(text)));
         }
-        static string Hex(byte[] b)
+        public static string Hex(byte[] b)
         {
             var sb = new StringBuilder(b.Length * 2);
             foreach (var x in b) sb.Append(x.ToString("x2"));
@@ -674,6 +702,756 @@ namespace Infamous2Launcher
         }
     }
 
+    // ------------------------------------------------------------------ updates: the latest GitHub release
+    static class SemVer
+    {
+        // "v1.2.3", "1.2", "1.2.3-rc1": up to four numbers and a pre-release tag; false when it is not a version
+        public static bool TryParse(string s, out int[] nums, out string pre)
+        {
+            nums = null; pre = "";
+            if (s == null) return false;
+            s = s.Trim();
+            if (s.StartsWith("v") || s.StartsWith("V")) s = s.Substring(1);
+            int plus = s.IndexOf('+');
+            if (plus >= 0) s = s.Substring(0, plus);
+            int dash = s.IndexOf('-');
+            if (dash >= 0) { pre = s.Substring(dash + 1); s = s.Substring(0, dash); }
+            var parts = s.Split('.');
+            if (parts.Length > 4) return false;
+            var n = new int[4];
+            for (int i = 0; i < parts.Length; i++)
+                if (!int.TryParse(parts[i], NumberStyles.None, CultureInfo.InvariantCulture, out n[i])) return false;
+            nums = n;
+            return true;
+        }
+        public static bool Valid(string s) { int[] n; string p; return TryParse(s, out n, out p); }
+        // < 0 when a is older than b (1.2.3-rc1 is older than 1.2.3); 0 when equal or either is not a version
+        public static int Compare(string a, string b)
+        {
+            int[] x, y; string px, py;
+            if (!TryParse(a, out x, out px) || !TryParse(b, out y, out py)) return 0;
+            for (int i = 0; i < 4; i++) if (x[i] != y[i]) return x[i] < y[i] ? -1 : 1;
+            if (px.Length == 0 || py.Length == 0) return px.Length == py.Length ? 0 : px.Length == 0 ? 1 : -1;
+            return Math.Sign(string.CompareOrdinal(px, py));
+        }
+        public static string Clean(string tag)
+        {
+            if (tag == null) return null;
+            tag = tag.Trim();
+            return tag.StartsWith("v") || tag.StartsWith("V") ? tag.Substring(1) : tag;
+        }
+    }
+
+    class ReleaseAsset { public string Name, Url, Digest; public long Size; }
+
+    class ReleaseInfo
+    {
+        public string Tag, Name, Body, HtmlUrl;
+        public bool Draft, Prerelease;
+        public List<ReleaseAsset> Assets = new List<ReleaseAsset>();
+        public string Version { get { return SemVer.Clean(Tag); } }
+        // the ready-to-run zip: inFamous2Recomp-<tag>-windows.zip (found by its name's pattern)
+        public ReleaseAsset WindowsZip
+        {
+            get { return Assets.FirstOrDefault(a => a.Name != null && Regex.IsMatch(a.Name, @"^inFamous2Recomp-.+-windows\.zip$", RegexOptions.IgnoreCase)); }
+        }
+
+        public static ReleaseInfo Parse(string json)
+        {
+            var js = new System.Web.Script.Serialization.JavaScriptSerializer { MaxJsonLength = 16 << 20 };
+            var d = js.DeserializeObject(json) as Dictionary<string, object>;
+            if (d == null) throw new InvalidDataException("the answer is not a release");
+            var r = new ReleaseInfo
+            {
+                Tag = Str(d, "tag_name"), Name = Str(d, "name"), Body = Str(d, "body"), HtmlUrl = Str(d, "html_url"),
+                Draft = Bool(d, "draft"), Prerelease = Bool(d, "prerelease")
+            };
+            if (string.IsNullOrEmpty(r.Tag)) throw new InvalidDataException("the answer has no tag_name" + (d.ContainsKey("message") ? " (GitHub: " + Str(d, "message") + ")" : ""));
+            object a;
+            if (d.TryGetValue("assets", out a) && a is object[])
+                foreach (var o in (object[])a)
+                {
+                    var ad = o as Dictionary<string, object>;
+                    if (ad == null) continue;
+                    long size = 0;
+                    object sv;
+                    if (ad.TryGetValue("size", out sv) && sv != null) try { size = Convert.ToInt64(sv, CultureInfo.InvariantCulture); } catch { }
+                    r.Assets.Add(new ReleaseAsset { Name = Str(ad, "name"), Url = Str(ad, "browser_download_url"), Digest = Str(ad, "digest"), Size = size });
+                }
+            return r;
+        }
+        static string Str(Dictionary<string, object> d, string k) { object v; return d.TryGetValue(k, out v) && v != null ? Convert.ToString(v, CultureInfo.InvariantCulture) : null; }
+        static bool Bool(Dictionary<string, object> d, string k) { object v; return d.TryGetValue(k, out v) && v is bool && (bool)v; }
+    }
+
+    static class Updates
+    {
+        static Updates()
+        {
+            // the .NET Framework may default to TLS 1.0 for an exe built like this one; GitHub needs 1.2
+            try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12; } catch { }
+        }
+        public static string Overridden { get { string e = Environment.GetEnvironmentVariable("INF2L_UPDATE_API"); return string.IsNullOrEmpty(e) ? null : e; } }
+        public static string ApiUrl { get { return Overridden ?? AppInfo.ApiLatest; } }
+        public static bool OffByEnv { get { return Environment.GetEnvironmentVariable("INF2L_NO_UPDATE_CHECK") == "1"; } }
+        public static string TempRoot { get { return Path.Combine(Path.GetTempPath(), "inFamous2Recomp-update"); } }
+
+        public static HttpWebRequest Request(string url, int timeoutMs)
+        {
+            var req = (HttpWebRequest)WebRequest.Create(url);
+            req.UserAgent = AppInfo.UserAgent;
+            req.Timeout = timeoutMs; req.ReadWriteTimeout = timeoutMs;
+            req.AllowAutoRedirect = true;
+            return req;
+        }
+
+        // One GET of releases/latest (GitHub leaves drafts and pre-releases out of it). Throws on any failure.
+        public static ReleaseInfo FetchLatest(int timeoutMs)
+        {
+            var req = Request(ApiUrl, timeoutMs);
+            req.Accept = "application/vnd.github+json";
+            req.Headers["X-GitHub-Api-Version"] = "2022-11-28";
+            var ar = req.BeginGetResponse(null, null);
+            if (!ar.AsyncWaitHandle.WaitOne(timeoutMs)) { req.Abort(); throw new TimeoutException("no answer within " + timeoutMs / 1000 + " s"); }
+            using (var resp = (HttpWebResponse)req.EndGetResponse(ar))
+            using (var rd = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                return ReleaseInfo.Parse(rd.ReadToEnd());
+        }
+
+        // "v0.1.3 -- <title>", or the title alone when it already starts with the tag
+        public static string Title(ReleaseInfo r)
+        {
+            if (string.IsNullOrEmpty(r.Name) || r.Name == r.Tag) return r.Tag;
+            return r.Name.StartsWith(r.Tag, StringComparison.OrdinalIgnoreCase) ? r.Name : r.Tag + " -- " + r.Name;
+        }
+
+        public static bool IsNewer(ReleaseInfo r)
+        {
+            return r != null && !r.Draft && !r.Prerelease && SemVer.Valid(r.Tag) && SemVer.Compare(AppInfo.Version, r.Tag) < 0;
+        }
+
+        public static string Describe(Exception e)
+        {
+            var we = e as WebException;
+            if (we != null && we.Response is HttpWebResponse)
+                return "HTTP " + (int)((HttpWebResponse)we.Response).StatusCode + " " + ((HttpWebResponse)we.Response).StatusDescription;
+            return e.GetType().Name + ": " + e.Message;
+        }
+
+        // "sha256:<64 hex>" -> the hex; null when the asset lists no SHA-256
+        public static string DigestSha256(string digest)
+        {
+            if (string.IsNullOrEmpty(digest) || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) return null;
+            string h = digest.Substring(7).Trim().ToLowerInvariant();
+            return Regex.IsMatch(h, "^[0-9a-f]{64}$") ? h : null;
+        }
+
+        // Only this repository's release downloads over https (the tests' INF2L_UPDATE_API lifts that).
+        public static bool DownloadAllowed(string url)
+        {
+            if (Overridden != null) return url != null && (url.StartsWith("http://") || url.StartsWith("https://"));
+            return url != null && url.StartsWith("https://github.com/" + AppInfo.Repo + "/releases/download/", StringComparison.OrdinalIgnoreCase);
+        }
+        public static string ReleasePage(ReleaseInfo r)
+        {
+            if (r != null && r.HtmlUrl != null &&
+                (r.HtmlUrl.StartsWith("https://github.com/" + AppInfo.Repo + "/", StringComparison.OrdinalIgnoreCase) ||
+                 (Overridden != null && (r.HtmlUrl.StartsWith("http://") || r.HtmlUrl.StartsWith("https://")))))
+                return r.HtmlUrl;
+            return AppInfo.ReleasesPage;
+        }
+
+        // The start of the release notes, without the heaviest markdown, for the dialog.
+        public static string Excerpt(string body, int max)
+        {
+            if (string.IsNullOrEmpty(body)) return "(no release notes)";
+            var sb = new StringBuilder();
+            foreach (var raw in body.Replace("\r\n", "\n").Split('\n'))
+            {
+                string l = raw.TrimEnd().Replace("**", "").Replace("`", "");
+                if (l.StartsWith("#")) l = l.TrimStart('#').Trim();
+                if (sb.Length + l.Length > max)
+                {
+                    int room = max - sb.Length;
+                    if (room > 40) sb.Append(l.Substring(0, room)).Append("...");
+                    else sb.Append("...");
+                    break;
+                }
+                sb.Append(l).Append("\r\n");
+            }
+            return Regex.Replace(sb.ToString(), @"(\r\n){3,}", "\r\n\r\n").Trim();
+        }
+
+        // Old work folders of earlier updates (the updater's copy, the backup of a clean undo); never one marked KEEP.
+        public static void CleanTemp()
+        {
+            try
+            {
+                if (!Directory.Exists(TempRoot)) return;
+                foreach (var d in Directory.GetDirectories(TempRoot))
+                {
+                    try
+                    {
+                        if (File.Exists(Path.Combine(d, "KEEP.txt"))) continue;
+                        if (DateTime.UtcNow - Directory.GetLastWriteTimeUtc(d) < TimeSpan.FromHours(1)) continue;
+                        Directory.Delete(d, true);
+                    }
+                    catch { }
+                }
+                foreach (var f in Directory.GetFiles(TempRoot, "update-*.log"))
+                    try { if (DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > TimeSpan.FromDays(30)) File.Delete(f); } catch { }
+            }
+            catch { }
+        }
+
+        public static string Report(Options o)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("launcher version: " + AppInfo.Version);
+            sb.AppendLine("api: " + ApiUrl);
+            try
+            {
+                var t0 = DateTime.Now;
+                var r = FetchLatest(10000);
+                sb.AppendLine("answer after: " + (int)(DateTime.Now - t0).TotalMilliseconds + " ms");
+                sb.AppendLine("tag: " + r.Tag + "  (version " + r.Version + ", valid " + SemVer.Valid(r.Tag) + ")");
+                sb.AppendLine("name: " + r.Name);
+                sb.AppendLine("draft: " + r.Draft + "  prerelease: " + r.Prerelease);
+                sb.AppendLine("newer than this launcher: " + IsNewer(r));
+                sb.AppendLine("release page: " + ReleasePage(r));
+                foreach (var a in r.Assets)
+                    sb.AppendLine("asset: " + a.Name + "  size " + a.Size + "  digest " + (a.Digest ?? "(none)") + "  sha256 " + (DigestSha256(a.Digest) ?? "(none)") +
+                                  "  download allowed " + DownloadAllowed(a.Url) + "  " + a.Url);
+                var z = r.WindowsZip;
+                sb.AppendLine("windows zip: " + (z != null ? z.Name : "(none)"));
+                sb.AppendLine("excerpt:");
+                sb.AppendLine(Excerpt(r.Body, 700));
+            }
+            catch (Exception e) { sb.AppendLine("check failed: " + Describe(e)); }
+            return sb.ToString();
+        }
+    }
+
+    // ------------------------------------------------------------------ updates: staging and installing a release zip
+    class UpdatePlan
+    {
+        public string Root, Stage, Backup, Restart, FromVersion, ToVersion, Log;
+        public int Pid;
+        public List<string> Write = new List<string>(), Delete = new List<string>(), Skipped = new List<string>();
+
+        public void Save(string path)
+        {
+            var l = new List<string>
+            {
+                "root=" + Root, "stage=" + Stage, "backup=" + Backup, "restart=" + Restart, "from=" + FromVersion,
+                "to=" + ToVersion, "log=" + Log, "pid=" + Pid
+            };
+            l.AddRange(Write.Select(f => "write=" + f));
+            l.AddRange(Delete.Select(f => "delete=" + f));
+            l.AddRange(Skipped.Select(f => "skipped=" + f));
+            File.WriteAllLines(path, l, new UTF8Encoding(false));
+        }
+        public static UpdatePlan Load(string path)
+        {
+            var p = new UpdatePlan();
+            foreach (var line in File.ReadAllLines(path))
+            {
+                int k = line.IndexOf('=');
+                if (k <= 0) continue;
+                string key = line.Substring(0, k), v = line.Substring(k + 1);
+                if (key == "root") p.Root = v; else if (key == "stage") p.Stage = v; else if (key == "backup") p.Backup = v;
+                else if (key == "restart") p.Restart = v; else if (key == "from") p.FromVersion = v; else if (key == "to") p.ToVersion = v;
+                else if (key == "log") p.Log = v; else if (key == "pid") int.TryParse(v, out p.Pid);
+                else if (key == "write") p.Write.Add(Installer.Normalize(v));
+                else if (key == "delete") p.Delete.Add(Installer.Normalize(v));
+                else if (key == "skipped") p.Skipped.Add(v);
+            }
+            if (p.Root == null || p.Stage == null || p.Backup == null) throw new InvalidDataException("incomplete update plan " + path);
+            return p;
+        }
+    }
+
+    class UpdateFailed : Exception
+    {
+        public readonly bool Clean;   // true: every change was undone (or none was made)
+        public UpdateFailed(string m, bool clean) : base(m) { Clean = clean; }
+    }
+
+    static class Installer
+    {
+        public const string Manifest = "release-files.txt";
+        // The player's own data: never written, never deleted, whatever a release lists.
+        static readonly string[] PlayerDirs =
+        {
+            "game", "build", "generated", "analysis", "external", "logs", "savestates", "checkpoints", "gamedata", ".launcher",
+            "pgo", "screenshots", "textures", "texdump", "texpacks", "out", ".git", ".vs"
+        };
+        static readonly string[] PlayerFiles = { @"config\options.ini", @"config\options.ini.tmp", "options.ini" };
+
+        // a release-relative path: backslashes, no root, no "..", no empty part
+        public static string Normalize(string rel)
+        {
+            string r = (rel ?? "").Trim().Replace('/', '\\');
+            if (r.Length == 0 || r.StartsWith("\\") || r.IndexOf(':') >= 0)
+                throw new InvalidDataException("bad path in the release: \"" + rel + "\"");
+            foreach (var part in r.Split('\\'))
+                if (part.Length == 0 || part == "." || part == ".." || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                    throw new InvalidDataException("bad path in the release: \"" + rel + "\"");
+            return r;
+        }
+
+        public static bool IsPlayerData(string rel)
+        {
+            string top = rel.Split('\\')[0];
+            if (PlayerDirs.Contains(top, StringComparer.OrdinalIgnoreCase)) return true;
+            if (top.StartsWith("build-", StringComparison.OrdinalIgnoreCase)) return true;
+            return PlayerFiles.Contains(rel, StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Every existing part of root\rel below root must be a plain folder or file: the update never writes to
+        // or deletes through a junction or a symbolic link.
+        public static void CheckNoLinks(string root, string rel)
+        {
+            string p = root;
+            foreach (var part in rel.Split('\\'))
+            {
+                p = Path.Combine(p, part);
+                FileAttributes a;
+                try { a = File.GetAttributes(p); }
+                catch (FileNotFoundException) { return; }
+                catch (DirectoryNotFoundException) { return; }
+                if ((a & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException(p + " is a link (junction or symbolic link). The update never writes through links: move it away and try again.");
+            }
+        }
+
+        // Unpacks the release zip into stageDir and returns its one top folder (inFamous2Recomp\).
+        public static string Extract(string zip, string stageDir)
+        {
+            if (Directory.Exists(stageDir)) Directory.Delete(stageDir, true);
+            Directory.CreateDirectory(stageDir);
+            string full = Path.GetFullPath(stageDir).TrimEnd('\\') + "\\";
+            string prefix = null;
+            using (var fs = File.OpenRead(zip))
+            using (var z = new ZipArchive(fs, ZipArchiveMode.Read))
+                foreach (var e in z.Entries)
+                {
+                    if (e.FullName.EndsWith("/") || e.FullName.EndsWith("\\")) continue;     // folder entries
+                    string rel = Normalize(e.FullName);
+                    int cut = rel.IndexOf('\\');
+                    if (cut < 0) throw new InvalidDataException("the zip holds " + rel + " outside its top folder");
+                    string top = rel.Substring(0, cut);
+                    if (prefix == null) prefix = top;
+                    else if (!string.Equals(prefix, top, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("the zip has more than one top folder");
+                    string dst = Path.GetFullPath(Path.Combine(stageDir, rel));
+                    if (!dst.StartsWith(full, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("bad path in the zip: " + e.FullName);
+                    Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                    using (var i = e.Open()) using (var o = File.Create(dst)) i.CopyTo(o);
+                }
+            if (prefix == null) throw new InvalidDataException("the zip is empty");
+            string r = Path.Combine(stageDir, prefix);
+            foreach (var need in new[] { "inFamous2Launcher.exe", @"tools\build.ps1", "ps3recomp.pin" })
+                if (!File.Exists(Path.Combine(r, need))) throw new InvalidDataException("the zip has no " + prefix + "\\" + need + ": not an inFamous2Recomp release");
+            return r;
+        }
+
+        static List<string> ReadManifest(string path)
+        {
+            return File.ReadAllLines(path).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith("#")).Select(Normalize).ToList();
+        }
+
+        // What the update writes (the release's files, but never player data), and what it deletes (files the
+        // installed release listed and the new one does not; nothing when either manifest is missing).
+        public static UpdatePlan MakePlan(string root, string staged, Action<string> log)
+        {
+            var files = Directory.GetFiles(staged, "*", SearchOption.AllDirectories)
+                                 .Select(f => f.Substring(staged.Length + 1)).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+            var inZip = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+            HashSet<string> listed = null;
+            string nm = Path.Combine(staged, Manifest);
+            if (File.Exists(nm))
+            {
+                listed = new HashSet<string>(ReadManifest(nm), StringComparer.OrdinalIgnoreCase);
+                foreach (var f in files) if (!listed.Contains(f)) throw new InvalidDataException("the release zip holds " + f + ", which its " + Manifest + " does not list");
+                foreach (var f in listed) if (!inZip.Contains(f)) throw new InvalidDataException("the release's " + Manifest + " lists " + f + ", which its zip does not hold");
+            }
+            else log("the new release has no " + Manifest + ": files it no longer has are left in place");
+
+            var p = new UpdatePlan { Root = root, Stage = staged };
+            int same = 0;
+            foreach (var f in files)
+            {
+                if (IsPlayerData(f)) { p.Skipped.Add(f); continue; }
+                CheckNoLinks(root, f);
+                string t = Path.Combine(root, f), s = Path.Combine(staged, f);
+                // a file that is already identical is left as it is (fewer writes, nothing to undo)
+                if (File.Exists(t) && new FileInfo(t).Length == new FileInfo(s).Length && Util.Sha1File(t) == Util.Sha1File(s)) { same++; continue; }
+                p.Write.Add(f);
+            }
+            log(p.Write.Count + " files new or changed, " + same + " already up to date");
+            string om = Path.Combine(root, Manifest);
+            if (!File.Exists(om)) log("this folder has no " + Manifest + " (an install from before v0.1.2): nothing is deleted");
+            else if (listed != null)
+                foreach (var f in ReadManifest(om))
+                {
+                    if (listed.Contains(f) || IsPlayerData(f)) continue;
+                    CheckNoLinks(root, f);
+                    if (File.Exists(Path.Combine(root, f))) p.Delete.Add(f);
+                }
+            foreach (var f in p.Skipped) log("left alone (player data folder): " + f);
+            foreach (var f in p.Delete) log("to delete (no longer in the release): " + f);
+            return p;
+        }
+
+        // Nothing may hold a file the update changes: checked for every file before the first one is touched.
+        static void EnsureFree(string path, string rel)
+        {
+            try
+            {
+                bool ro = (File.GetAttributes(path) & FileAttributes.ReadOnly) != 0;
+                using (new FileStream(path, FileMode.Open, ro ? FileAccess.Read : FileAccess.ReadWrite, FileShare.None)) { }
+            }
+            catch (Exception e)
+            {
+                if (!(e is IOException) && !(e is UnauthorizedAccessException)) throw;
+                throw new IOException(rel + " is in use or cannot be written (" + e.Message.Trim() + ")\r\nClose what holds it " +
+                                      "(another launcher window, an editor, the game) and try the update again.");
+            }
+        }
+
+        // Runs in the updater, after the launcher has closed. All checks first; then every file that is replaced or
+        // deleted is backed up, and any failure puts back every file already changed.
+        public static void Apply(UpdatePlan p, Action<string> log, Action<int, int> progress)
+        {
+            try
+            {
+                foreach (var f in p.Write.Concat(p.Delete))
+                {
+                    if (IsPlayerData(f)) throw new IOException("the plan touches player data: " + f);
+                    CheckNoLinks(p.Root, f);
+                }
+                foreach (var f in p.Write)
+                    if (!File.Exists(Path.Combine(p.Stage, f))) throw new IOException("the staged file " + f + " is missing");
+                foreach (var f in p.Write.Concat(p.Delete))
+                {
+                    string t = Path.Combine(p.Root, f);
+                    if (File.Exists(t)) EnsureFree(t, f);
+                    else if (Directory.Exists(t)) throw new IOException(f + " is a folder in this install, but a file in the release");
+                }
+            }
+            catch (Exception e) { throw new UpdateFailed(e.Message, true); }
+            log("checks passed: " + p.Write.Count + " files to write, " + p.Delete.Count + " to delete; nothing is in use");
+
+            string fail = Environment.GetEnvironmentVariable("INF2L_UPDATE_TEST_FAIL");
+            var done = new List<KeyValuePair<string, bool>>();     // file, existed before (then the backup holds it)
+            var madeDirs = new List<string>();
+            int n = 0, total = p.Write.Count + p.Delete.Count;
+            string current = null;
+            try
+            {
+                foreach (var f in p.Write)
+                {
+                    current = f;
+                    string t = Path.Combine(p.Root, f);
+                    bool existed = File.Exists(t);
+                    if (existed) BackUp(p, f);
+                    done.Add(new KeyValuePair<string, bool>(f, existed));
+                    MakeDirs(p.Root, Path.GetDirectoryName(f), madeDirs);
+                    if (existed) File.SetAttributes(t, File.GetAttributes(t) & ~FileAttributes.ReadOnly);
+                    File.Copy(Path.Combine(p.Stage, f), t, true);
+                    if (fail != null && string.Equals(Normalize(fail), f, StringComparison.OrdinalIgnoreCase))
+                        throw new IOException("test failure after writing " + f + " (INF2L_UPDATE_TEST_FAIL)");
+                    progress(++n, total);
+                }
+                foreach (var f in p.Delete)
+                {
+                    current = f;
+                    string t = Path.Combine(p.Root, f);
+                    BackUp(p, f);
+                    done.Add(new KeyValuePair<string, bool>(f, true));
+                    File.SetAttributes(t, FileAttributes.Normal);
+                    File.Delete(t);
+                    log("deleted " + f);
+                    progress(++n, total);
+                }
+            }
+            catch (Exception e)
+            {
+                log("FAILED at " + current + ": " + e.Message);
+                log("undoing the " + done.Count + " file(s) already changed");
+                var bad = new List<string>();
+                for (int i = done.Count - 1; i >= 0; i--)
+                {
+                    string f = done[i].Key, t = Path.Combine(p.Root, f);
+                    try
+                    {
+                        if (done[i].Value)
+                        {
+                            Directory.CreateDirectory(Path.GetDirectoryName(t));
+                            if (File.Exists(t)) File.SetAttributes(t, FileAttributes.Normal);
+                            File.Copy(Path.Combine(p.Backup, f), t, true);
+                        }
+                        else if (File.Exists(t)) { File.SetAttributes(t, FileAttributes.Normal); File.Delete(t); }
+                    }
+                    catch (Exception e2) { bad.Add(f + " (" + e2.Message + ")"); }
+                }
+                for (int i = madeDirs.Count - 1; i >= 0; i--) try { Directory.Delete(madeDirs[i], false); } catch { }
+                if (bad.Count > 0)
+                {
+                    foreach (var b in bad) log("UNDO FAILED: " + b);
+                    throw new UpdateFailed(current + ": " + e.Message + "\r\n\r\nThe undo failed for " + bad.Count + " file(s): " + string.Join(", ", bad), false);
+                }
+                log("undo complete: the folder is as it was before the update");
+                throw new UpdateFailed(current + ": " + e.Message, true);
+            }
+        }
+
+        static void BackUp(UpdatePlan p, string f)
+        {
+            string b = Path.Combine(p.Backup, f);
+            Directory.CreateDirectory(Path.GetDirectoryName(b));
+            File.Copy(Path.Combine(p.Root, f), b, true);
+        }
+
+        static void MakeDirs(string root, string relDir, List<string> made)
+        {
+            if (string.IsNullOrEmpty(relDir)) return;
+            string d = root;
+            foreach (var part in relDir.Split('\\'))
+            {
+                d = Path.Combine(d, part);
+                if (!Directory.Exists(d)) { Directory.CreateDirectory(d); made.Add(d); }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ updates: the windows
+    class UpdateForm : Form
+    {
+        public UpdateForm(ReleaseInfo r, bool gitClone)
+        {
+            Text = "inFamous 2 -- update available";
+            Font = new Font("Segoe UI", 9f);
+            ClientSize = new Size(620, 430);
+            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ShowInTaskbar = false;
+
+            Controls.Add(new Label
+            {
+                Text = "A new version is available: " + r.Tag + "   (you have v" + AppInfo.Version + ")",
+                Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), Left = 16, Top = 12, Width = 590, Height = 26
+            });
+            Controls.Add(new Label { Text = r.Name ?? r.Tag, Left = 16, Top = 40, Width = 590, Height = 20, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) });
+            var notes = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Text = Updates.Excerpt(r.Body, 900) };
+            notes.SetBounds(16, 64, 588, 196);
+            Controls.Add(notes);
+            var z = r.WindowsZip;
+            string info;
+            if (gitClone)
+                info = "This folder is a git clone: update it with git pull, then build the launcher with tools\\build_launcher.cmd. " +
+                       "Your game files, build, saves and settings are not part of the repository and stay as they are.";
+            else if (z == null)
+                info = "This release has no Windows zip to install: see its release notes.";
+            else
+                info = "Update now downloads " + z.Name + (z.Size > 0 ? " (" + (z.Size / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB)" : "") +
+                       " from GitHub, checks it, closes the launcher, replaces the port's files and the launcher, and starts it again.\r\n\r\n" +
+                       "Your game files, build, saves, settings and logs are kept. The game then needs a rebuild of a few minutes.";
+            Controls.Add(new Label { Text = info, Left = 16, Top = 270, Width = 590, Height = 100 });
+
+            var bUpd = new Button { Text = "Update now", Left = 16, Top = 384, Width = 120, Height = 32, DialogResult = DialogResult.Yes, Enabled = z != null && !gitClone };
+            var bNotes = new Button { Text = "Release notes", Left = 144, Top = 384, Width = 120, Height = 32 };
+            bNotes.Click += (s, e) => MainForm.OpenUrl(Updates.ReleasePage(r));
+            var bSkip = new Button { Text = "Skip this version", Left = 364, Top = 384, Width = 130, Height = 32, DialogResult = DialogResult.Ignore };
+            var bLater = new Button { Text = "Later", Left = 502, Top = 384, Width = 102, Height = 32, DialogResult = DialogResult.Cancel };
+            Controls.AddRange(new Control[] { bUpd, bNotes, bSkip, bLater });
+            AcceptButton = bUpd.Enabled ? (IButtonControl)bUpd : bLater;
+            CancelButton = bLater;
+            notes.TabStop = false;
+            ActiveControl = bUpd.Enabled ? (Control)bUpd : bLater;     // not the notes (their text would show selected)
+        }
+    }
+
+    // Downloads the release zip to a file, hashing it on the way; Cancel aborts.
+    class DownloadForm : Form
+    {
+        readonly ReleaseAsset asset;
+        readonly string dest;
+        readonly ProgressBar bar = new ProgressBar();
+        readonly Label lbl = new Label();
+        readonly Button btn = new Button();
+        volatile bool cancelled, running;
+        HttpWebRequest req;
+        int shown = -1;
+        public string Error, Sha256;
+        public long Bytes;
+
+        public DownloadForm(ReleaseAsset asset, string dest)
+        {
+            this.asset = asset; this.dest = dest;
+            Text = "inFamous 2 -- downloading the update";
+            Font = new Font("Segoe UI", 9f);
+            ClientSize = new Size(500, 120);
+            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent; ShowInTaskbar = false;
+            lbl.SetBounds(16, 14, 468, 20); lbl.Text = "Downloading " + asset.Name + " ...";
+            bar.SetBounds(16, 40, 468, 22); bar.Maximum = 1000;
+            btn.Text = "Cancel"; btn.SetBounds(394, 78, 90, 30);
+            btn.Click += (s, e) => DoCancel();
+            Controls.AddRange(new Control[] { lbl, bar, btn });
+            FormClosing += (s, e) => { if (running) { e.Cancel = true; DoCancel(); } };
+            Shown += (s, e) => { running = true; new Thread(Work) { IsBackground = true, Name = "update download" }.Start(); };
+        }
+
+        void DoCancel()
+        {
+            if (!running || cancelled) return;
+            cancelled = true; btn.Enabled = false; lbl.Text = "Cancelling...";
+            try { var r = req; if (r != null) r.Abort(); } catch { }
+        }
+
+        void Work()
+        {
+            try
+            {
+                req = Updates.Request(asset.Url, 30000);
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var s = resp.GetResponseStream())
+                using (var o = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var h = SHA256.Create())
+                {
+                    long total = asset.Size > 0 ? asset.Size : resp.ContentLength, got = 0;
+                    var buf = new byte[81920];
+                    int n;
+                    while ((n = s.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        if (cancelled) throw new OperationCanceledException();
+                        o.Write(buf, 0, n);
+                        h.TransformBlock(buf, 0, n, null, 0);
+                        got += n;
+                        int pm = total > 0 ? (int)Math.Min(1000, got * 1000 / total) : 0;
+                        if (pm != shown) { shown = pm; long g = got, t = total; BeginInvoke(new Action(() => Progress(g, t))); }
+                    }
+                    if (cancelled) throw new OperationCanceledException();
+                    h.TransformFinalBlock(buf, 0, 0);
+                    if (asset.Size > 0 && got != asset.Size) throw new IOException("downloaded " + got + " bytes; the release lists " + asset.Size);
+                    Bytes = got;
+                    Sha256 = Util.Hex(h.Hash);
+                }
+            }
+            catch (Exception e) { if (!cancelled) Error = Updates.Describe(e); }
+            BeginInvoke(new Action(() =>
+            {
+                running = false;
+                DialogResult = Sha256 != null && Error == null && !cancelled ? DialogResult.OK : DialogResult.Cancel;
+                Close();
+            }));
+        }
+
+        void Progress(long got, long total)
+        {
+            bar.Value = total > 0 ? (int)Math.Min(1000, got * 1000 / total) : 0;
+            if (!cancelled)
+                lbl.Text = "Downloading " + asset.Name + ": " + (got / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) +
+                           (total > 0 ? " of " + (total / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) : "") + " MB";
+        }
+    }
+
+    // The updater: a temp copy of the launcher started with --apply-update. Waits for the launcher to close,
+    // installs the staged release, and starts the launcher again (the new one, or the old one after an undo).
+    class ApplyForm : Form
+    {
+        readonly string planPath;
+        readonly Label lbl = new Label();
+        readonly ProgressBar bar = new ProgressBar();
+        UpdatePlan plan;
+        StreamWriter log;
+
+        public ApplyForm(string planPath)
+        {
+            this.planPath = planPath;
+            Text = "inFamous 2 -- installing the update";
+            Font = new Font("Segoe UI", 9f);
+            ClientSize = new Size(480, 90);
+            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; ControlBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            lbl.SetBounds(16, 14, 448, 20); lbl.Text = "Waiting for the launcher to close...";
+            bar.SetBounds(16, 44, 448, 22); bar.Maximum = 1000;
+            Controls.AddRange(new Control[] { lbl, bar });
+            Shown += (s, e) => new Thread(Work) { IsBackground = true, Name = "apply update" }.Start();
+        }
+
+        void Log(string s)
+        {
+            try { if (log != null) { log.WriteLine(DateTime.Now.ToString("HH:mm:ss ", CultureInfo.InvariantCulture) + s); log.Flush(); } } catch { }
+        }
+
+        void Work()
+        {
+            string error = null;
+            bool clean = true, restart = true;
+            try
+            {
+                plan = UpdatePlan.Load(planPath);
+                try { log = new StreamWriter(plan.Log, true, new UTF8Encoding(false)); } catch { }
+                Log("updater: v" + plan.FromVersion + " -> v" + plan.ToVersion + " in " + plan.Root);
+                try
+                {
+                    using (var parent = Process.GetProcessById(plan.Pid))
+                        if (!parent.WaitForExit(60000)) { restart = false; throw new UpdateFailed("the launcher (process " + plan.Pid + ") did not close", true); }
+                }
+                catch (ArgumentException) { }       // already gone
+                BeginInvoke(new Action(() => lbl.Text = "Installing v" + plan.ToVersion + " ..."));
+                Installer.Apply(plan, Log, (n, t) => BeginInvoke(new Action(() => bar.Value = t > 0 ? n * 1000 / t : 1000)));
+                Log("installed v" + plan.ToVersion + ": " + plan.Write.Count + " files written, " + plan.Delete.Count + " deleted, " + plan.Skipped.Count + " left alone");
+            }
+            catch (UpdateFailed e) { error = e.Message; clean = e.Clean; }
+            catch (Exception e) { error = e.Message; }
+            if (error != null) Log("update NOT installed: " + error + (clean ? "" : " -- the folder is partly updated; the backup is kept"));
+            // clean up the staged copy and the backup (kept when the undo was incomplete)
+            try
+            {
+                if (plan != null)
+                {
+                    string work = Path.GetDirectoryName(plan.Backup);
+                    if (!clean) File.WriteAllText(Path.Combine(work, "KEEP.txt"), "backup of the files an incomplete update changed: " + plan.Backup + "\r\n");
+                    else
+                    {
+                        if (Directory.Exists(plan.Backup)) Directory.Delete(plan.Backup, true);
+                        string stage = Path.GetDirectoryName(plan.Stage);
+                        if (Directory.Exists(stage)) Directory.Delete(stage, true);
+                        foreach (var z in Directory.GetFiles(work, "*.zip")) File.Delete(z);
+                    }
+                }
+            }
+            catch { }
+            BeginInvoke(new Action(() => Done(error, clean, restart)));
+        }
+
+        void Done(string error, bool clean, bool restart)
+        {
+            string logPath = plan != null ? plan.Log : null;
+            if (error != null)
+            {
+                MessageBox.Show(this, clean
+                    ? "The update could not be installed:\r\n\r\n" + error + "\r\n\r\nYour folder is as it was before the update (anything already replaced was put back)" +
+                      (restart ? "; the launcher starts again." : ".")
+                    : "The update failed and could not be fully undone:\r\n\r\n" + error + "\r\n\r\nThe changed files' backup is in " + (plan != null ? plan.Backup : "?") +
+                      ". To repair the folder, extract the release zip over it (your game files, saves and settings are not in the zip).",
+                    "inFamous 2 -- update", MessageBoxButtons.OK, clean ? MessageBoxIcon.Warning : MessageBoxIcon.Error);
+                Log("updater: error shown");
+            }
+            if (restart && plan != null && File.Exists(plan.Restart))
+            {
+                string args = (error == null ? "--updated \"" + plan.FromVersion + "\"" : "--update-failed") + (logPath != null ? " --update-log \"" + logPath + "\"" : "");
+                try { Process.Start(new ProcessStartInfo(plan.Restart, args) { UseShellExecute = false, WorkingDirectory = plan.Root }); Log("started " + plan.Restart + " " + args); }
+                catch (Exception e) { Log("could not start the launcher: " + e.Message); }
+            }
+            try { if (log != null) log.Dispose(); } catch { }
+            Close();
+        }
+    }
+
     // ------------------------------------------------------------------ main window
     class MainForm : Form
     {
@@ -708,6 +1486,16 @@ namespace Infamous2Launcher
         Process game;              // the run.ps1 powershell while the game runs
         DateTime gameStart;
 
+        // updates
+        readonly Panel content = new Panel(), banner = new Panel();
+        readonly Label lblBanner = new Label(), lblVersion = new Label();
+        readonly Button btnCheckUpd = new Button();
+        readonly CheckBox chkUpd = new CheckBox();
+        ReleaseInfo latest;        // a newer release than this launcher, once the check found one
+        bool checking, pendingDialog, bannerGrown;
+
+        [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hWnd);
+
         public MainForm(string root, Options opts)
         {
             this.root = root; this.opts = opts;
@@ -715,16 +1503,36 @@ namespace Infamous2Launcher
             pipe = new Pipeline(root, files);
             state = new State(root);
 
-            Text = "inFamous 2 -- PC launcher";
+            Text = "inFamous 2 -- PC launcher v" + AppInfo.Version;
             Font = new Font("Segoe UI", 9f);
             ClientSize = new Size(1000, 760);
             MinimumSize = new Size(820, 640);
             StartPosition = FormStartPosition.CenterScreen;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            var title = new Label { Text = "inFamous 2 -- native PC build (static recompilation)", Font = new Font("Segoe UI", 15f, FontStyle.Bold), Left = 14, Top = 10, Width = 960, Height = 32 };
-            var sub = new Label { Text = "Builds a Windows executable from your own copy of the game (BCUS98125, update 1.04) and starts it. No emulator; no game files included.", Left = 16, Top = 44, Width = 960, Height = 20, ForeColor = SystemColors.GrayText };
+            // everything below the update banner lives in `content` (the banner, when shown, pushes it down)
+            content.Bounds = new Rectangle(0, 0, 1000, 760);
+            var Controls = content.Controls;
+
+            var title = new Label { Text = "inFamous 2 -- native PC build (static recompilation)", Font = new Font("Segoe UI", 15f, FontStyle.Bold), Left = 14, Top = 10, Width = 780, Height = 32 };
+            var sub = new Label { Text = "Builds a Windows executable from your own copy of the game (BCUS98125, update 1.04) and starts it. No emulator; no game files included.", Left = 16, Top = 44, Width = 830, Height = 20, ForeColor = SystemColors.GrayText };
             Controls.Add(title); Controls.Add(sub);
+
+            lblVersion.Text = "launcher v" + AppInfo.Version; lblVersion.SetBounds(800, 4, 188, 16); lblVersion.TextAlign = ContentAlignment.TopRight;
+            lblVersion.ForeColor = SystemColors.GrayText; lblVersion.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnCheckUpd.Text = "Check for updates"; btnCheckUpd.SetBounds(852, 20, 136, 26); btnCheckUpd.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnCheckUpd.Click += (s, e) => CheckForUpdates(true);
+            chkUpd.Text = "Check at startup"; chkUpd.SetBounds(856, 48, 132, 20); chkUpd.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            chkUpd.Checked = !Updates.OffByEnv && state.Get("update.check") != "0";
+            if (Updates.OffByEnv) chkUpd.Enabled = false;
+            new ToolTip().SetToolTip(chkUpd, Updates.OffByEnv ? "Off: INF2L_NO_UPDATE_CHECK=1 is set." :
+                                     "At startup, ask GitHub whether a newer release exists (one request to api.github.com; nothing about you is sent).");
+            chkUpd.CheckedChanged += (s, e) =>
+            {
+                state.Set("update.check", chkUpd.Checked ? null : "0");
+                Append("update check at startup: " + (chkUpd.Checked ? "on" : "off"));
+            };
+            Controls.Add(lblVersion); Controls.Add(btnCheckUpd); Controls.Add(chkUpd);
 
             var gFiles = new GroupBox { Text = "1. Your game files", Left = 12, Top = 70, Width = 976, Height = 64, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             lblFiles.SetBounds(12, 22, 820, 36); lblFiles.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -771,6 +1579,31 @@ namespace Infamous2Launcher
             Controls.AddRange(new Control[] { btnMain, btnCancel, btnRebuild, btnLogs, btnFolder, lnkOldBuild, lblHint });
             AcceptButton = btnMain;
 
+            // the update banner (hidden until the check finds a newer release)
+            banner.Bounds = new Rectangle(0, 0, 1000, 44);
+            banner.BackColor = Color.FromArgb(255, 236, 170);
+            banner.Visible = false;
+            lblBanner.SetBounds(14, 0, 520, 44); lblBanner.TextAlign = ContentAlignment.MiddleLeft; lblBanner.AutoEllipsis = true;
+            lblBanner.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold); lblBanner.ForeColor = Color.FromArgb(60, 40, 0);
+            lblBanner.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            banner.Controls.Add(lblBanner);
+            int bx = 1000 - 12;
+            foreach (var b in new[] { new { T = "Later", W = 70 }, new { T = "Skip this version", W = 124 }, new { T = "Release notes", W = 106 }, new { T = "Update now", W = 100 } })
+            {
+                bx -= b.W;
+                var btn = new Button { Text = b.T, Left = bx, Top = 8, Width = b.W, Height = 28, Anchor = AnchorStyles.Top | AnchorStyles.Right, BackColor = SystemColors.Control, UseVisualStyleBackColor = true };
+                string which = b.T;
+                btn.Click += (s, e) => BannerAction(which);
+                banner.Controls.Add(btn);
+                bx -= 6;
+            }
+            this.Controls.Add(banner);
+            this.Controls.Add(content);
+            banner.Dock = DockStyle.Top;
+            content.Dock = DockStyle.Fill;
+            content.BringToFront();
+            Activated += (s, e) => { if (pendingDialog && CanShowUpdateDialog()) { pendingDialog = false; BeginInvoke(new Action(ShowUpdateDialog)); } };
+
             tick.Interval = 150;
             tick.Tick += (s, e) => OnTick();
             tick.Start();
@@ -782,11 +1615,253 @@ namespace Infamous2Launcher
 
         void OnShown()
         {
+            Append("launcher v" + AppInfo.Version + ": " + root);
+            // the update check runs in the background: it never holds up the window
+            if (Updates.OffByEnv) Append("update check: off (INF2L_NO_UPDATE_CHECK=1)");
+            else if (state.Get("update.check") == "0") Append("update check: off (\"Check at startup\" is unticked)");
+            else CheckForUpdates(false);
+            ThreadPool.QueueUserWorkItem(_ => Updates.CleanTemp());
+            if (opts.Updated != null) state.Set("update.installed", AppInfo.Version);
+            ShowUpdateLog();
             DetectPrereqs();
             RefreshUi();
-            Append("launcher: " + root);
             if (!files.Present) BeginInvoke(new Action(ChooseFiles));
+            else if (opts.Updated != null && File.Exists(ExePath) && FirstStale() < Pipeline.Steps.Length)
+                BeginInvoke(new Action(() => MessageBox.Show(this,
+                    "The launcher was updated to v" + AppInfo.Version + " (from v" + opts.Updated + ").\r\n\r\n" +
+                    "The update changed the port's sources, so the game needs a rebuild: it takes a few minutes. " +
+                    "Press \"Continue build\" (or Rebuild).\r\n\r\nYour game files, saves, settings and logs are kept.",
+                    "inFamous 2 -- updated", MessageBoxButtons.OK, MessageBoxIcon.Information)));
         }
+
+        // ---------------------------------------------------------- updates
+        void ShowUpdateLog()
+        {
+            if (opts.Updated != null) Append("updated from v" + opts.Updated + " to v" + AppInfo.Version);
+            if (opts.UpdateFailed) Append("the update was NOT installed (see below); this is still v" + AppInfo.Version);
+            if (opts.UpdateLog == null) return;
+            Append("update log: " + opts.UpdateLog);
+            try
+            {
+                var lines = File.ReadAllLines(opts.UpdateLog);
+                foreach (var l in lines.Skip(Math.Max(0, lines.Length - 30))) Append("  | " + l);
+            }
+            catch (Exception e) { Append("  (could not read it: " + e.Message + ")"); }
+        }
+
+        void CheckForUpdates(bool manual)
+        {
+            if (checking) return;
+            checking = true;
+            btnCheckUpd.Enabled = false;
+            Append("update check: asking " + Updates.ApiUrl);
+            var t = new Thread(() =>
+            {
+                ReleaseInfo r = null; string err = null;
+                try { r = Updates.FetchLatest(10000); }
+                catch (Exception ex) { err = Updates.Describe(ex); }
+                try { if (!IsDisposed && IsHandleCreated) BeginInvoke(new Action(() => CheckDone(r, err, manual))); } catch { }
+            }) { IsBackground = true, Name = "update check" };
+            t.Start();
+        }
+
+        void CheckDone(ReleaseInfo r, string err, bool manual)
+        {
+            checking = false;
+            btnCheckUpd.Enabled = true;
+            if (err != null)
+            {
+                Append("update check failed: " + err);
+                if (manual) MessageBox.Show(this, "Could not reach GitHub to check for updates:\r\n\r\n" + err, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (!Updates.IsNewer(r))
+            {
+                Append("update check: v" + AppInfo.Version + " is up to date (latest release: " + r.Tag +
+                       (r.Draft || r.Prerelease ? ", a draft or pre-release: ignored" : !SemVer.Valid(r.Tag) ? ", not a version number: ignored" : "") + ")");
+                if (manual) MessageBox.Show(this, "You have the latest version (v" + AppInfo.Version + ").", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                latest = null;
+                HideBanner();
+                return;
+            }
+            latest = r;
+            Append("update available: " + Updates.Title(r) + " (you have v" + AppInfo.Version + ")");
+            if (!manual && state.Get("update.skip") == r.Version)
+            {
+                Append("  you chose to skip " + r.Tag + "; \"Check for updates\" shows it again");
+                return;
+            }
+            ShowBanner();
+            // the dialog: once per version at startup (the banner stays), every time on "Check for updates"
+            if (manual || state.Get("update.notified") != r.Version)
+            {
+                if (CanShowUpdateDialog()) ShowUpdateDialog();
+                else pendingDialog = true;
+            }
+        }
+
+        bool CanShowUpdateDialog()
+        {
+            return latest != null && !building && game == null && WindowState != FormWindowState.Minimized &&
+                   IsHandleCreated && IsWindowEnabled(Handle);      // not over another dialog
+        }
+
+        void ShowUpdateDialog()
+        {
+            if (latest == null) return;
+            state.Set("update.notified", latest.Version);
+            DialogResult res;
+            using (var f = new UpdateForm(latest, IsGitClone)) res = f.ShowDialog(this);
+            if (res == DialogResult.Yes) StartUpdate();
+            else if (res == DialogResult.Ignore) SkipVersion();
+            else Append("update " + latest.Tag + ": later (the banner stays until you skip or install it)");
+        }
+
+        void ShowBanner()
+        {
+            lblBanner.Text = "Update available: " + Updates.Title(latest) + "   (you have v" + AppInfo.Version + ")";
+            if (banner.Visible) return;
+            banner.Visible = true;
+            // grow the window by the banner's height so the build area keeps its size
+            if (WindowState == FormWindowState.Normal) { Height += banner.Height; bannerGrown = true; }
+        }
+
+        void HideBanner()
+        {
+            if (!banner.Visible) return;
+            banner.Visible = false;
+            if (bannerGrown && WindowState == FormWindowState.Normal) Height -= banner.Height;
+            bannerGrown = false;
+        }
+
+        void BannerAction(string which)
+        {
+            if (latest == null) { HideBanner(); return; }
+            if (which == "Update now") StartUpdate();
+            else if (which == "Release notes") OpenUrl(Updates.ReleasePage(latest));
+            else if (which == "Skip this version") SkipVersion();
+            else { HideBanner(); Append("update " + latest.Tag + ": later (shown again at the next start)"); }
+        }
+
+        void SkipVersion()
+        {
+            state.Set("update.skip", latest.Version);
+            Append("update " + latest.Tag + " skipped: not offered again at startup (\"Check for updates\" still shows it)");
+            HideBanner();
+        }
+
+        public static void OpenUrl(string url)
+        {
+            try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+        }
+
+        bool IsGitClone { get { return Directory.Exists(Path.Combine(root, ".git")) || File.Exists(Path.Combine(root, ".git")); } }
+
+        void StartUpdate()
+        {
+            if (latest == null) return;
+            if (building) { MessageBox.Show(this, "Finish or cancel the build first, then update.", Text); return; }
+            if (game != null) { MessageBox.Show(this, "Close the game first, then update.", Text); return; }
+            if (IsGitClone)
+            {
+                MessageBox.Show(this, "This folder is a git clone: update it with git pull, then build the launcher with tools\\build_launcher.cmd.\r\n\r\n" +
+                                "(Update now installs release zips; it would leave your clone with uncommitted changes.)", Text);
+                return;
+            }
+            var asset = latest.WindowsZip;
+            if (asset == null || !Updates.DownloadAllowed(asset.Url))
+            {
+                Append("update: " + (asset == null ? "the release has no inFamous2Recomp-*-windows.zip" : "refusing the download address " + asset.Url));
+                MessageBox.Show(this, "This release has no Windows zip the launcher can install. Get it from the release page.", Text);
+                OpenUrl(Updates.ReleasePage(latest));
+                return;
+            }
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            string work = Path.Combine(Updates.TempRoot, latest.Version + "-" + stamp);
+            string zip = Path.Combine(work, asset.Name);
+            Directory.CreateDirectory(work);
+            Append("update: downloading " + asset.Url);
+            string sha;
+            long bytes;
+            using (var d = new DownloadForm(asset, zip))
+            {
+                if (d.ShowDialog(this) != DialogResult.OK)
+                {
+                    Append(d.Error != null ? "update: download failed: " + d.Error : "update: download cancelled");
+                    if (d.Error != null) MessageBox.Show(this, "The download failed:\r\n\r\n" + d.Error, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    TryDeleteDir(work);
+                    return;
+                }
+                sha = d.Sha256; bytes = d.Bytes;
+            }
+            Append("update: downloaded " + bytes + " bytes, SHA-256 " + sha);
+            string want = Updates.DigestSha256(asset.Digest);
+            if (want != null)
+            {
+                if (want != sha)
+                {
+                    Append("update: SHA-256 MISMATCH -- GitHub lists " + want + "; the download is refused and deleted");
+                    MessageBox.Show(this, "The download does not match the checksum GitHub lists for it, so it was not installed.\r\n\r\n" +
+                                    "Expected SHA-256 " + want + "\r\nDownloaded " + sha + "\r\n\r\nTry again later.", Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    TryDeleteDir(work);
+                    return;
+                }
+                Append("update: SHA-256 matches the digest GitHub lists for " + asset.Name);
+            }
+            else
+            {
+                Append("update: GitHub lists no SHA-256 digest for " + asset.Name + ": the download cannot be verified");
+                if (MessageBox.Show(this, "GitHub lists no checksum for " + asset.Name + ", so the download cannot be verified.\r\n\r\nSHA-256 of the download: " + sha +
+                                    "\r\n\r\nInstall it anyway?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                {
+                    Append("update: not installed (unverified download declined)");
+                    TryDeleteDir(work);
+                    return;
+                }
+                Append("update: installing the unverified download (you confirmed)");
+            }
+            UpdatePlan plan;
+            try
+            {
+                Cursor = Cursors.WaitCursor;
+                string staged = Installer.Extract(zip, Path.Combine(work, "stage"));
+                plan = Installer.MakePlan(root, staged, s => Append("update: " + s));
+            }
+            catch (Exception ex)
+            {
+                Cursor = Cursors.Default;
+                Append("update: refused: " + ex.Message);
+                MessageBox.Show(this, "The update was not installed:\r\n\r\n" + ex.Message + "\r\n\r\nNothing was changed.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                TryDeleteDir(work);
+                return;
+            }
+            Cursor = Cursors.Default;
+            plan.Backup = Path.Combine(work, "backup");
+            plan.Restart = Path.Combine(root, "inFamous2Launcher.exe");
+            plan.FromVersion = AppInfo.Version; plan.ToVersion = latest.Version;
+            plan.Pid = Process.GetCurrentProcess().Id;
+            plan.Log = Path.Combine(Updates.TempRoot, "update-" + stamp + ".log");
+            string planPath = Path.Combine(work, "plan.txt");
+            string updater = Path.Combine(work, "inFamous2Launcher-updater.exe");
+            try
+            {
+                plan.Save(planPath);
+                File.Copy(Application.ExecutablePath, updater, true);
+                Process.Start(new ProcessStartInfo(updater, "--apply-update \"" + planPath + "\"") { UseShellExecute = false, WorkingDirectory = work });
+            }
+            catch (Exception ex)
+            {
+                Append("update: could not start the updater: " + ex.Message);
+                MessageBox.Show(this, "Could not start the updater: " + ex.Message + "\r\n\r\nNothing was changed.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                TryDeleteDir(work);
+                return;
+            }
+            Append("update: " + plan.Write.Count + " files to write, " + plan.Delete.Count + " to delete; the launcher closes now and restarts as " + latest.Tag);
+            Flush();
+            Close();
+        }
+
+        static void TryDeleteDir(string d) { try { if (Directory.Exists(d)) Directory.Delete(d, true); } catch { } }
 
         // ---------------------------------------------------------- game files
         void ChooseFiles()
@@ -970,6 +2045,7 @@ namespace Infamous2Launcher
             {
                 btnMain.Text = "Play"; btnMain.Enabled = true;
                 lblStep.Text = "Ready: the build is up to date.";
+                if (state.Get("update.installed") != null) state.Set("update.installed", null);
                 bar.Value = 1000;
                 lblHint.Text = "Built " + File.GetLastWriteTime(ExePath).ToString("g", CultureInfo.CurrentCulture) + ".";
             }
@@ -981,6 +2057,9 @@ namespace Infamous2Launcher
                 else if (File.Exists(ExePath)) lnkOldBuild.Visible = true;
                 lblStep.Text = stale == 0 ? "Not built yet (" + Pipeline.Steps.Length + " steps; the first build takes a while)."
                                           : "Next: step " + (stale + 1) + " of " + Pipeline.Steps.Length + ", " + Pipeline.Steps[stale].Title + ".";
+                // after an update the sources' fingerprints changed: say why a build is due and what is kept
+                if (state.Get("update.installed") != null && File.Exists(ExePath))
+                    lblStep.Text = "Updated to v" + state.Get("update.installed") + ": the game needs a rebuild (a few minutes). Your saves and settings are kept.";
                 bar.Value = (int)(1000 * DoneWeight(stale) / TotalWeight());
             }
         }
@@ -1295,6 +2374,16 @@ namespace Infamous2Launcher
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             var o = Options.Parse(args);
+            if (o.ApplyUpdate != null)
+            {
+                Application.Run(new ApplyForm(o.ApplyUpdate));
+                return 0;
+            }
+            if (o.UpdateCheckOut != null)
+            {
+                File.WriteAllText(o.UpdateCheckOut, Updates.Report(o));
+                return 0;
+            }
             string root = FindRoot();
             if (root == null)
             {

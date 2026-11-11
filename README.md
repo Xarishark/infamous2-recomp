@@ -144,8 +144,16 @@ your files changed. **Rebuild** runs every step again; **Open logs** and **Open 
 they say. If a step fails, the launcher shows the end of its log; fix the cause and press **Retry**:
 finished steps are not run again.
 
-The launcher fetches the ps3recomp toolkit from GitHub with git during its first step; it downloads
-nothing else by itself. You can also start the built game directly: double-click `build\infamous2.exe`.
+The launcher fetches the ps3recomp toolkit from GitHub with git during its first step. You can also
+start the built game directly: double-click `build\infamous2.exe`.
+
+**Updates.** At startup the launcher asks GitHub, in the background, whether a newer release exists
+(one request to `api.github.com`; nothing about you or your PC is sent). If there is one, a banner and a
+dialog offer **Update now**: it downloads the release zip, checks its SHA-256, replaces the launcher and
+the port's files, and restarts. Your game files, build, saves, settings and logs are kept; the game then
+needs a rebuild of a few minutes (**Continue build**). You can also extract the new zip over your folder
+by hand. To turn the check off, untick **Check at startup** (or set `INF2L_NO_UPDATE_CHECK=1`);
+**Check for updates** asks on demand. A git clone is updated with `git pull` instead.
 
 ## Building by hand
 

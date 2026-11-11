@@ -13,6 +13,7 @@ if not exist "%CSC%" (
 "%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ /utf8output ^
     /out:"%ROOT%\inFamous2Launcher.exe" ^
     /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll ^
+    /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll ^
     "%ROOT%\launcher\inFamous2Launcher.cs"
 if errorlevel 1 (
     echo launcher build FAILED
