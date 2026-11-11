@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/images/banner.png" alt="inFamous 2 native PC recomp" width="100%"></p>
 
-# inFamous 2 — native PC port (static recompilation)
+# inFamous2Recomp
 
 A native Windows build of Sucker Punch's *inFamous 2* (PlayStation 3, 2011), made by **statically
 recompiling** the game's own PowerPC and SPU code into C++ with the
