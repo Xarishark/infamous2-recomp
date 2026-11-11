@@ -81,12 +81,36 @@ Captured from the port running on Windows (2560x1080 monitor); cropped and resiz
 - **RPCS3** (free) to decrypt two files you own: the update's `EBOOT.BIN` -> `EBOOT.elf`, and the
   firmware's `dev_flash/sys/external/libsre.sprx` -> `libsre.prx` (install the official PS3 firmware in
   RPCS3 first). Step by step: [game/README.md](game/README.md).
-- **A Windows 10/11 x64 PC** with a **Direct3D 12** GPU. A modern 8-core CPU is recommended: the game's
-  SPU work runs on CPU cores. About **20 GB** of free disk space (the disc stays where it is; the build
-  takes about 5 GB and the game's own HDD install about 2.5 GB).
+- **A Windows 10/11 x64 PC** that meets the [system requirements](#system-requirements) below. About
+  **20 GB** of free disk space (the disc stays where it is; the build takes about 5 GB and the game's own
+  HDD install about 2.5 GB).
 - **Build tools** -- the launcher checks them and offers to install missing ones with winget:
   Git for Windows (with Git Bash), Python 3.10+, CMake 3.20+, Ninja, Visual Studio 2022 Build Tools
   with the C++ workload, LLVM (`clang-cl`).
+
+## System requirements
+
+So far the port has been tested on **one PC**. The hard requirements come from the build itself; the
+minimum and recommended tiers are **estimates** scaled from the test PC. Reports from other hardware are
+very welcome (each session's `logs\play-*-issues.txt` records your CPU, GPU and frame rate).
+
+| | Minimum (estimate, ~30 fps) | Recommended (60+ fps in most areas) |
+|---|---|---|
+| **OS** | Windows 10 64-bit | Windows 11 64-bit |
+| **CPU** | 6 cores / 12 threads with **AVX2**, Ryzen 5 5600 / Core i5-11400 class | 8 cores / 16 threads, Ryzen 7 7700 / Core i7-12700 class or newer |
+| **GPU** | Direct3D 12 (feature level 11_0), 2 GB VRAM, GTX 1050 Ti / RX 570 class | 4 GB+ VRAM, GTX 1660 / RX 5600 XT class (more for a higher internal resolution) |
+| **RAM** | 8 GB | 16 GB |
+| **Disk** | ~20 GB free, plus ~10 GB for the build tools if you don't have them | same, on an SSD |
+
+- **Hard requirements:** 64-bit Windows 10 or 11, a CPU with **AVX2** (Intel 4th gen / Haswell or
+  newer, any AMD Ryzen), and a Direct3D 12 GPU with current drivers.
+- **The CPU matters most.** The game's PS3 code (the PPU and five SPU workers) runs as several busy
+  threads, so per-core speed and core count decide the frame rate. The GPU is rarely the limit: at the
+  default resolution the game used under 1 GB of VRAM on the test PC.
+- **GPU vendors:** tested on NVIDIA only. AMD and Intel GPUs should work through Direct3D 12 but are
+  untested.
+- **Test PC:** Ryzen 7 9800X3D, RTX 5080, 2560x1080 at 75 Hz: about 52 fps in the heaviest fight tested,
+  about 65 fps on busy New Marais streets, and the display's 75 Hz cap in lighter scenes.
 
 ## Quick start with the launcher
 
