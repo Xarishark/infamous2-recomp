@@ -19449,7 +19449,7 @@ index 144245d..8cb37a5 100644
  static inline int spurs_bitset_test(uint32_t bitset_ea, uint32_t taskId)
  {
 diff --git a/libs/system/cellGame.c b/libs/system/cellGame.c
-index 071b9ec..ac5317c 100644
+index 071b9ec..bceb127 100644
 --- a/libs/system/cellGame.c
 +++ b/libs/system/cellGame.c
 @@ -7,6 +7,7 @@
@@ -19471,7 +19471,51 @@ index 071b9ec..ac5317c 100644
  
  /* Content info / usrdir paths.
   *
-@@ -193,6 +198,7 @@ void cellGame_set_title_id(const char* title_id)
+@@ -57,7 +62,11 @@ static char s_app_ver[16]   = "01.00";
+  *
+  * The literal below is only the fallback for a host with no VFS configured;
+  * content_root() resolves the real one on first use. */
+-static char s_content_path[CELL_GAME_PATH_MAX] = "./gamedata/dev_hdd0/game";
++/* HOST paths (the install folder + /game/<dir>/USRDIR...) get their own size: CELL_GAME_PATH_MAX (128) is the
++ * guest's limit: cut at 128 bytes, a deep install folder's game data went to a folder named after the first
++ * 127 bytes of the path, and the HDD install never completed (issue #2). */
++#define CELL_GAME_HOST_PATH_MAX 1024
++static char s_content_path[CELL_GAME_HOST_PATH_MAX] = "./gamedata/dev_hdd0/game";
+ static int  s_content_path_resolved = 0;
+ 
+ /* Resolved the same way ppu_fs.cpp resolves the /dev_hdd0 mount: $PS3_HDD0_ROOT
+@@ -83,9 +92,9 @@ static const char* content_root(void)
+     }
+     return s_content_path;
+ }
+-static char s_content_info_path[CELL_GAME_PATH_MAX] = "";
+-static char s_usrdir_path[CELL_GAME_PATH_MAX] = "";
+-static char s_tmp_path[CELL_GAME_PATH_MAX] = "";
++static char s_content_info_path[CELL_GAME_HOST_PATH_MAX] = "";
++static char s_usrdir_path[CELL_GAME_HOST_PATH_MAX] = "";
++static char s_tmp_path[CELL_GAME_HOST_PATH_MAX] = "";
+ static char s_exit_param[256] = "";
+ 
+ static int  s_boot_checked = 0;
+@@ -102,7 +111,7 @@ static char s_check_dir[64] = "";
+ 
+ static void ensure_dirs(const char* path)
+ {
+-    char tmp[CELL_GAME_PATH_MAX];
++    char tmp[CELL_GAME_HOST_PATH_MAX];
+     strncpy(tmp, path, sizeof(tmp) - 1);
+     tmp[sizeof(tmp) - 1] = '\0';
+ 
+@@ -133,7 +142,7 @@ static int dir_exists(const char* path)
+  * so installation checks use the destination volume, without creating data. */
+ static s32 content_free_kb(void)
+ {
+-    char path[CELL_GAME_PATH_MAX];
++    char path[CELL_GAME_HOST_PATH_MAX];
+     snprintf(path, sizeof(path), "%s", s_content_path[0] ? s_content_path : ".");
+     for (;;) {
+ #ifdef _WIN32
+@@ -193,6 +202,7 @@ void cellGame_set_title_id(const char* title_id)
      if (!title_id) return;
      strncpy(s_title_id, title_id, sizeof(s_title_id) - 1);
      s_title_id[sizeof(s_title_id) - 1] = '\0';
@@ -19479,7 +19523,7 @@ index 071b9ec..ac5317c 100644
  }
  
  void cellGame_set_title(const char* title)
-@@ -207,6 +213,7 @@ void cellGame_set_title(const char* title)
+@@ -207,6 +217,7 @@ void cellGame_set_title(const char* title)
   * which is confusing the moment you run two ports side by side. */
  const char* cellGame_get_title(void)
  {
@@ -19487,7 +19531,7 @@ index 071b9ec..ac5317c 100644
      return s_title;
  }
  
-@@ -284,10 +291,25 @@ static int sfo_read_string(const char* sfo_path, const char* key,
+@@ -284,10 +295,25 @@ static int sfo_read_string(const char* sfo_path, const char* key,
  /* Read title/version fields from the game's PARAM.SFO at boot. Call once
   * from main.cpp before the guest runs. Falls back to the defaults if the SFO
   * can't be read (keeps the game working without it). */
@@ -19514,7 +19558,7 @@ index 071b9ec..ac5317c 100644
          strncpy(s_title_id, tmp, sizeof(s_title_id) - 1);
          s_title_id[sizeof(s_title_id) - 1] = '\0';
          printf("[cellGame] title id from PARAM.SFO ('%s'): '%s'\n", sfo_path, s_title_id);
-@@ -308,17 +330,59 @@ void cellGame_init_from_paramsfo(const char* sfo_path)
+@@ -308,17 +334,59 @@ void cellGame_init_from_paramsfo(const char* sfo_path)
      if (sfo_read_string(sfo_path, "APP_VER", tmp, sizeof(tmp)) == 0 && tmp[0]) {
          strncpy(s_app_ver, tmp, sizeof(s_app_ver) - 1); s_app_ver[sizeof(s_app_ver) - 1] = '\0';
      }
@@ -19580,7 +19624,7 @@ index 071b9ec..ac5317c 100644
      snprintf(s_content_info_path, sizeof(s_content_info_path),
               "%s/%s", content_root(), s_title_id);
      snprintf(s_usrdir_path, sizeof(s_usrdir_path),
-@@ -331,6 +395,16 @@ s32 cellGameBootCheck(u32* type, u32* attributes, CellGameContentSize* size,
+@@ -331,6 +399,16 @@ s32 cellGameBootCheck(u32* type, u32* attributes, CellGameContentSize* size,
      for (char* p = s_usrdir_path; *p; p++) if (*p == '/') *p = '\\';
      for (char* p = s_tmp_path; *p; p++) if (*p == '/') *p = '\\';
  #endif
@@ -19597,7 +19641,7 @@ index 071b9ec..ac5317c 100644
  
      /* The HLE bridge passes the GUEST addresses of these out-params (the PPC
       * r3-r6 values), not host pointers. Translate through vm_base and write
-@@ -369,6 +443,7 @@ s32 cellGameBootCheck(u32* type, u32* attributes, CellGameContentSize* size,
+@@ -369,6 +447,7 @@ s32 cellGameBootCheck(u32* type, u32* attributes, CellGameContentSize* size,
  
  s32 cellGameContentPermit(char* contentInfoPath, char* usrdirPath)
  {
@@ -19605,7 +19649,16 @@ index 071b9ec..ac5317c 100644
      printf("[cellGame] ContentPermit() -> %s\n",
             s_check_is_disc ? "/dev_bdvd/PS3_GAME" : "game-data dir");
  
-@@ -414,6 +489,7 @@ s32 cellGameContentPermit(char* contentInfoPath, char* usrdirPath)
+@@ -383,7 +462,7 @@ s32 cellGameContentPermit(char* contentInfoPath, char* usrdirPath)
+         ensure_dirs(s_usrdir_path);
+         {
+             extern const char* ppu_vfs_root;
+-            char vpath[CELL_GAME_PATH_MAX];
++            char vpath[CELL_GAME_HOST_PATH_MAX];
+             snprintf(vpath, sizeof vpath, "%s/game/%s/USRDIR", ppu_vfs_root, s_check_dir);
+             ensure_dirs(vpath);
+         }
+@@ -414,6 +493,7 @@ s32 cellGameContentPermit(char* contentInfoPath, char* usrdirPath)
  
  s32 cellGameDataCheck(u32 type, const char* dirName, CellGameContentSize* size)
  {
@@ -19613,7 +19666,16 @@ index 071b9ec..ac5317c 100644
      /* dirName is a GUEST address -- translate BEFORE any use. The old code
       * printf'd the raw EA as a host char* and crashed (LBP: read fault at
       * 0x94AEA0 = the guest EA of its dir string). */
-@@ -596,6 +672,7 @@ s32 cellHddGameCheck(u32 version, const char* dirName, u32 errDialog,
+@@ -427,7 +507,7 @@ s32 cellGameDataCheck(u32 type, const char* dirName, CellGameContentSize* size)
+     strncpy(s_check_dir, check_dir, sizeof(s_check_dir) - 1);
+     s_check_dir[sizeof(s_check_dir) - 1] = '\0';
+ 
+-    char path[CELL_GAME_PATH_MAX];
++    char path[CELL_GAME_HOST_PATH_MAX];
+     snprintf(path, sizeof(path), "%s/%s", content_root(), check_dir);
+ 
+     uint32_t size_ea = (uint32_t)(uintptr_t)size;
+@@ -596,6 +676,7 @@ s32 cellHddGameCheck(u32 version, const char* dirName, u32 errDialog,
   * and expects to read it back on the next run. */
  s32 cellGameSetParamString(s32 id, const char* buf)
  {
@@ -19621,7 +19683,7 @@ index 071b9ec..ac5317c 100644
      /* `buf` is a GUEST address (raw r4), like GetParamString's -- a host
       * dereference here faults. See [[guest-pointer-abi]]. */
      uint32_t buf_ea = (uint32_t)(uintptr_t)buf;
-@@ -626,6 +703,7 @@ s32 cellGameSetParamString(s32 id, const char* buf)
+@@ -626,6 +707,7 @@ s32 cellGameSetParamString(s32 id, const char* buf)
  
  s32 cellGameGetParamInt(s32 id, s32* value)
  {
@@ -19629,7 +19691,7 @@ index 071b9ec..ac5317c 100644
      printf("[cellGame] GetParamInt(id=%d)\n", id);
  
      /* `value` is a GUEST address; write big-endian via vm_write32. */
-@@ -635,11 +713,9 @@ s32 cellGameGetParamInt(s32 id, s32* value)
+@@ -635,11 +717,9 @@ s32 cellGameGetParamInt(s32 id, s32* value)
  
      uint32_t v = 0;
      switch (id) {
@@ -19644,7 +19706,7 @@ index 071b9ec..ac5317c 100644
      default:
          printf("[cellGame] WARNING: unknown param int id %d\n", id);
          v = 0;
-@@ -652,6 +728,7 @@ s32 cellGameGetParamInt(s32 id, s32* value)
+@@ -652,6 +732,7 @@ s32 cellGameGetParamInt(s32 id, s32* value)
  
  s32 cellGameGetParamString(s32 id, char* buf, u32 bufsize)
  {
@@ -19652,7 +19714,7 @@ index 071b9ec..ac5317c 100644
      printf("[cellGame] GetParamString(id=%d, bufsize=%u)\n", id, bufsize);
  
      /* `buf` is a GUEST address (raw r4); translate through vm_base. Strings are
-@@ -686,6 +763,7 @@ s32 cellGameGetParamString(s32 id, char* buf, u32 bufsize)
+@@ -686,6 +767,7 @@ s32 cellGameGetParamString(s32 id, char* buf, u32 bufsize)
  s32 cellGameCreateGameData(CellGameSetInitParams* init, char* tmp_contentInfoPath,
                              char* tmp_usrdirPath)
  {
@@ -19660,7 +19722,23 @@ index 071b9ec..ac5317c 100644
      printf("[cellGame] CreateGameData()\n");
  
      uint32_t init_ea = (uint32_t)(uintptr_t)init;   /* guest addrs */
-@@ -764,6 +842,7 @@ s32 cellGameGetSizeKB(s32* sizeKB)
+@@ -706,13 +788,13 @@ s32 cellGameCreateGameData(CellGameSetInitParams* init, char* tmp_contentInfoPat
+      * precedes this call, which is exactly what firmware creates. */
+     const char* create_dir = s_check_dir[0] ? s_check_dir : s_title_id;
+ 
+-    char path[CELL_GAME_PATH_MAX];
++    char path[CELL_GAME_HOST_PATH_MAX];
+     snprintf(path, sizeof(path), "%s/%s", content_root(), create_dir);
+ 
+     ensure_dirs(path);
+ 
+     /* Also create USRDIR */
+-    char usrdir[CELL_GAME_PATH_MAX];
++    char usrdir[CELL_GAME_HOST_PATH_MAX];
+     snprintf(usrdir, sizeof(usrdir), "%s/USRDIR", path);
+     ensure_dirs(usrdir);
+ 
+@@ -764,6 +846,7 @@ s32 cellGameGetSizeKB(s32* sizeKB)
  
  s32 cellGameGetLocalWebContentPath(char* path)
  {
@@ -19668,7 +19746,7 @@ index 071b9ec..ac5317c 100644
      printf("[cellGame] GetLocalWebContentPath()\n");
  
      if (!path)
-@@ -814,3 +893,44 @@ s32 cellGameContentErrorDialog(s32 type, s32 errNeedSizeKB, const char* dirName)
+@@ -814,3 +897,44 @@ s32 cellGameContentErrorDialog(s32 type, s32 errNeedSizeKB, const char* dirName)
  
      return CELL_OK;
  }
@@ -22383,19 +22461,167 @@ index 24b7deb..0d40f37 100644
 +__declspec(allocate(".CRT$XCU")) static void (*sysmod_ss_anchors_init)(void) = sysmod_ss_add_anchors;
 +#endif
 diff --git a/libs/system/cellSysutil.c b/libs/system/cellSysutil.c
-index 7524805..69f3db1 100644
+index 7524805..9487842 100644
 --- a/libs/system/cellSysutil.c
 +++ b/libs/system/cellSysutil.c
-@@ -7,6 +7,8 @@
+@@ -7,6 +7,9 @@
  
  #include "cellSysutil.h"
  #include "ps3emu/guest_call.h"
 +#include "../../runtime/savestate/ss_core.h"    /* SS_REASON_SECTION */
 +#include "../../runtime/savestate/ss_state.h"   /* field lists: this file's part of SUTL */
++#include "ps3emu/options.h"                     /* the "language" row (the system language) */
  #include <stdio.h>
  #include <stdlib.h>
  #include <string.h>
-@@ -502,3 +504,203 @@ s32 cellSysutilIsMeetingApp(void)
+@@ -243,6 +246,135 @@ s32 cellSysutilCheckCallback(void)
+     return CELL_OK;
+ }
+ 
++/* ---------------------------------------------------------------------------
++ * The system language. A PS3 reports the language set in its System Settings;
++ * a title picks its text and voice from it (inFamous 2 reads it once at boot).
++ * Here a settings-store row "language" stands in for that setting (see
++ * cellSysutil.h); the value is resolved once and kept, as on a PS3, where it
++ * cannot change while a game runs.
++ * -----------------------------------------------------------------------*/
++static const char* const s_lang_keys[CELL_SYSUTIL_LANG_COUNT] = {
++    "japanese", "english_us", "french", "spanish", "german", "italian", "dutch", "portuguese",
++    "russian", "korean", "chinese_t", "chinese_s", "finnish", "swedish", "danish", "norwegian",
++    "polish", "portuguese_br", "english_uk", "turkish",
++};
++
++const char* cellSysutil_lang_key(s32 lang)
++{
++    return lang >= 0 && lang < CELL_SYSUTIL_LANG_COUNT ? s_lang_keys[lang] : NULL;
++}
++
++s32 cellSysutil_lang_from_key(const char* key)
++{
++    if (!key) return -1;
++    for (s32 i = 0; i < CELL_SYSUTIL_LANG_COUNT; i++)
++        if (!strcmp(key, s_lang_keys[i])) return i;
++    return -1;
++}
++
++/* Windows LANGID: low 10 bits the primary language, the rest the region. */
++s32 cellSysutil_lang_from_windows(unsigned langid)
++{
++    const unsigned pri = langid & 0x3FF, sub = (langid >> 10) & 0x3F;
++    switch (pri) {
++    case 0x11: return CELL_SYSUTIL_LANG_JAPANESE;
++    case 0x09:  /* English: the UK and the Commonwealth regions a PS3 sold as PAL */
++        switch (langid) {
++        case 0x0809: case 0x0C09: case 0x1409: case 0x1809: case 0x1C09: case 0x4009:
++            return CELL_SYSUTIL_LANG_ENGLISH_GB;   /* GB, AU, NZ, IE, ZA, IN */
++        default: return CELL_SYSUTIL_LANG_ENGLISH_US;
++        }
++    case 0x0C: return CELL_SYSUTIL_LANG_FRENCH;
++    case 0x0A: return CELL_SYSUTIL_LANG_SPANISH;
++    case 0x07: return CELL_SYSUTIL_LANG_GERMAN;
++    case 0x10: return CELL_SYSUTIL_LANG_ITALIAN;
++    case 0x13: return CELL_SYSUTIL_LANG_DUTCH;
++    case 0x16: return sub == 1 ? CELL_SYSUTIL_LANG_PORTUGUESE_BR : CELL_SYSUTIL_LANG_PORTUGUESE_PT;
++    case 0x19: return CELL_SYSUTIL_LANG_RUSSIAN;
++    case 0x12: return CELL_SYSUTIL_LANG_KOREAN;
++    case 0x04:  /* Chinese: Taiwan, Hong Kong, Macao and zh-Hant are Traditional */
++        return (langid == 0x0404 || langid == 0x0C04 || langid == 0x1404 || langid == 0x7C04)
++            ? CELL_SYSUTIL_LANG_CHINESE_T : CELL_SYSUTIL_LANG_CHINESE_S;
++    case 0x0B: return CELL_SYSUTIL_LANG_FINNISH;
++    case 0x1D: return CELL_SYSUTIL_LANG_SWEDISH;
++    case 0x06: return CELL_SYSUTIL_LANG_DANISH;
++    case 0x14: return CELL_SYSUTIL_LANG_NORWEGIAN;
++    case 0x15: return CELL_SYSUTIL_LANG_POLISH;
++    case 0x1F: return CELL_SYSUTIL_LANG_TURKISH;
++    default:   return -1;
++    }
++}
++
++/* key is one of the '|'-separated words of list */
++static int lang_listed(const char* list, const char* key)
++{
++    const size_t n = strlen(key);
++    for (const char* p = list; p && *p; ) {
++        const char* e = strchr(p, '|');
++        const size_t len = e ? (size_t)(e - p) : strlen(p);
++        if (len == n && !strncmp(p, key, n)) return 1;
++        p = e ? e + 1 : NULL;
++    }
++    return 0;
++}
++
++s32 cellSysutil_lang_auto(unsigned langid, const char* offered)
++{
++    const s32 w = cellSysutil_lang_from_windows(langid);
++    if (w < 0 || !offered) return CELL_SYSUTIL_LANG_ENGLISH_US;
++    if (lang_listed(offered, cellSysutil_lang_key(w))) return w;
++    /* a title may offer only one of the two Portugueses, Englishes or Chineses */
++    const s32 sib = w == CELL_SYSUTIL_LANG_PORTUGUESE_BR ? CELL_SYSUTIL_LANG_PORTUGUESE_PT
++                  : w == CELL_SYSUTIL_LANG_PORTUGUESE_PT ? CELL_SYSUTIL_LANG_PORTUGUESE_BR
++                  : w == CELL_SYSUTIL_LANG_ENGLISH_GB    ? CELL_SYSUTIL_LANG_ENGLISH_US
++                  : w == CELL_SYSUTIL_LANG_ENGLISH_US    ? CELL_SYSUTIL_LANG_ENGLISH_GB
++                  : w == CELL_SYSUTIL_LANG_CHINESE_T     ? CELL_SYSUTIL_LANG_CHINESE_S
++                  : w == CELL_SYSUTIL_LANG_CHINESE_S     ? CELL_SYSUTIL_LANG_CHINESE_T : -1;
++    if (sib >= 0 && lang_listed(offered, cellSysutil_lang_key(sib))) return sib;
++    return CELL_SYSUTIL_LANG_ENGLISH_US;
++}
++
++static s32 s_sys_lang = -1;
++
++s32 cellSysutil_system_language(void)
++{
++    if (s_sys_lang >= 0) return s_sys_lang;
++    s32 lang = CELL_SYSUTIL_LANG_ENGLISH_US;
++    const opt_id id = opt_find("language");
++    const opt_def* d = id >= 0 ? opt_def_of(id) : NULL;
++    if (!d) {
++        printf("[cellSysutil] system language: english_us (the title has no language setting)\n");
++    } else {
++        char v[32] = "";
++        opt_text(id, v, sizeof v);
++        const char* where = NULL;
++        int line = 0;
++        const opt_source_kind src = opt_source(id, &where, &line);
++        char from[160];
++        if (src == OPT_SRC_ENV)       snprintf(from, sizeof from, "env %s", where ? where : "?");
++        else if (src == OPT_SRC_FILE) snprintf(from, sizeof from, "%s:%d", where ? where : "options.ini", line);
++        else                          snprintf(from, sizeof from, "default");
++        if (!strcmp(v, "auto")) {
++            unsigned wl = 0;
++#ifdef _WIN32
++            wl = GetUserDefaultUILanguage();
++#endif
++            const s32 w = cellSysutil_lang_from_windows(wl);
++            lang = cellSysutil_lang_auto(wl, d->values);
++            printf("[cellSysutil] system language: %s (language = auto (%s): Windows UI language 0x%04X = %s%s)\n",
++                   cellSysutil_lang_key(lang), from, wl, w >= 0 ? cellSysutil_lang_key(w) : "no PS3 language",
++                   w < 0 || lang == w ? "" : ", not offered by this title: the nearest it offers");
++        } else {
++            const s32 k = cellSysutil_lang_from_key(v);
++            lang = k >= 0 ? k : CELL_SYSUTIL_LANG_ENGLISH_US;
++            printf("[cellSysutil] system language: %s (language = %s, %s)\n", cellSysutil_lang_key(lang), v, from);
++        }
++    }
++    fflush(stdout);
++    s_sys_lang = lang;
++    return lang;
++}
++
+ /* value_ea is a GUEST address, and it is spelt as one. It used to be declared
+  * s32* and immediately cast back to a guest EA, with a comment explaining that
+  * dereferencing it as a host pointer faults -- true, and no help to a caller
+@@ -262,8 +394,8 @@ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea)
+     s32 v = 0;
+     switch (id) {
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_LANG:
+-        v = CELL_SYSUTIL_LANG_ENGLISH_US;
+-        break;
++        v = cellSysutil_system_language();
++        printf("[cellSysutil] GetSystemParamInt(LANG) = %d (%s)\n", v, cellSysutil_lang_key(v));        break;
+     case CELL_SYSUTIL_SYSTEMPARAM_ID_ENTER_BUTTON_ASSIGN:
+         v = CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CROSS;
+         break;
+@@ -502,3 +634,203 @@ s32 cellSysutilIsMeetingApp(void)
  {
      return 0; /* Not a meeting app */
  }
@@ -22599,6 +22825,43 @@ index 7524805..69f3db1 100644
 +    COMPLETION_UNLOCK();
 +    return 0;
 +}
+diff --git a/libs/system/cellSysutil.h b/libs/system/cellSysutil.h
+index 238e188..d586719 100644
+--- a/libs/system/cellSysutil.h
++++ b/libs/system/cellSysutil.h
+@@ -61,6 +61,7 @@ extern "C" {
+ #define CELL_SYSUTIL_LANG_PORTUGUESE_BR      17
+ #define CELL_SYSUTIL_LANG_ENGLISH_GB         18
+ #define CELL_SYSUTIL_LANG_TURKISH            19
++#define CELL_SYSUTIL_LANG_COUNT              20   /* the PS3's system languages are 0..19 */
+ 
+ /* Enter button assign */
+ #define CELL_SYSUTIL_ENTER_BUTTON_ASSIGN_CIRCLE  0
+@@ -126,6 +127,24 @@ void cellSysutilQueueEvent(int slot, u32 status, u32 param);
+ s32 cellSysutilGetSystemParamInt(s32 id, u32 value_ea);
+ s32 cellSysutilGetSystemParamString(s32 id, u32 buf_ea, u32 bufsize);
+ 
++/* The system language (CELL_SYSUTIL_SYSTEMPARAM_ID_LANG): what a PS3 set to
++ * that language reports. A title that registers a settings-store row "language"
++ * (include/ps3emu/options.h; OPT_ENUM, values "auto" and the keys below) picks it;
++ * auto = the Windows UI language's nearest PS3 language when the row offers it,
++ * else English (US). No row: English (US), as before. Resolved once, at the
++ * first query (a PS3 cannot change it while a game runs either), and logged.
++ * Keys, index = CELL_SYSUTIL_LANG_*: japanese english_us french spanish german
++ * italian dutch portuguese russian korean chinese_t chinese_s finnish swedish
++ * danish norwegian polish portuguese_br english_uk turkish. */
++s32         cellSysutil_system_language(void);
++const char* cellSysutil_lang_key(s32 lang);          /* NULL: not a PS3 language */
++s32         cellSysutil_lang_from_key(const char* key);  /* -1: no such key */
++/* A Windows LANGID (GetUserDefaultUILanguage) -> its PS3 language, -1 = none. */
++s32         cellSysutil_lang_from_windows(unsigned langid);
++/* auto: that language when `offered` ('|'-separated keys) has it, else its sibling
++ * (Portuguese PT/BR, English US/UK, Chinese T/S) when offered, else English (US). */
++s32         cellSysutil_lang_auto(unsigned langid, const char* offered);
++
+ /* ---------------------------------------------------------------------------
+  * BGM playback control
+  * -----------------------------------------------------------------------*/
 diff --git a/libs/system/opt_ini.h b/libs/system/opt_ini.h
 new file mode 100644
 index 0000000..672808c
@@ -25587,6 +25850,160 @@ index 0000000..8eed0e6
 +    puts("Save-data flow (inFamous 2 shaped): RPCS3 PARAM.SFO, reload stat data, list order, "
 +         "recreate, atomic commit, cancel, legacy format, test knobs and last-op checks passed");
 +    return 0;
++}
+diff --git a/libs/system/tests/test_sysutil_lang.c b/libs/system/tests/test_sysutil_lang.c
+new file mode 100644
+index 0000000..bd0201c
+--- /dev/null
++++ b/libs/system/tests/test_sysutil_lang.c
+@@ -0,0 +1,148 @@
++/*
++ * ps3recomp - the system language (libs/system/cellSysutil.c): the PS3
++ * language keys, the Windows UI language -> PS3 language map, the auto pick
++ * against a title's offered list, and what GetSystemParamInt(LANG) returns for
++ * a title's "language" row in the settings store (libs/system/options.c).
++ *
++ * From external/ps3recomp (Windows):
++ *   clang-cl /nologo /W3 -D_CRT_SECURE_NO_WARNINGS -I include -I libs/system -I libs/video -I libs/input
++ *     libs/system/tests/test_sysutil_lang.c libs/system/options.c /Fe:T/tsl.exe
++ *   T/tsl.exe
++ * The test includes cellSysutil.c itself (its other entry points are stubbed
++ * below), and starts itself again with IF2_LANGUAGE-style env locks for the
++ * cases that need a fresh store.
++ */
++#define _CRT_SECURE_NO_WARNINGS
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++/* ---- what cellSysutil.c needs from the rest of the runtime ---- */
++uint8_t* vm_base;
++static uint8_t s_mem[0x1000];
++static uint32_t s_last_w32;
++void vm_write8(uint64_t addr, uint8_t v) { s_mem[addr & 0xFFF] = v; }
++void vm_write32(uint64_t addr, uint32_t v) { (void)addr; s_last_w32 = v; }
++void cellMsgDialog_tick(void) {}
++const char* cellGame_get_title_id(void) { return "TEST00000"; }
++void cellPad_host_intercept(int on, int report_flag) { (void)on; (void)report_flag; }   /* options.c */
++int  cellPad_host_intercepted(void) { return 0; }
++
++#include "../cellSysutil.c"
++
++static int g_fail, g_checks;
++#define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
++
++static const opt_def kRow = {
++    "language", "system_language|lang", "options", "system", "System", "Language", "Language", "test",
++    OPT_ENUM, OPT_RESTART, "auto|english_us|french|spanish|portuguese",
++    "Auto|English|French|Spanish|Portuguese", 0, 0, 0, "auto", "TSL_LANGUAGE", NULL,
++    { NULL, NULL, NULL, NULL, NULL }, 0, "cellSysutil", NULL };
++
++static int child(const char* mode)
++{
++    if (!strcmp(mode, "norow")) {
++        CHECK(cellSysutil_system_language() == CELL_SYSUTIL_LANG_ENGLISH_US);
++    } else if (!strcmp(mode, "spanish")) {           /* TSL_LANGUAGE=spanish */
++        CHECK(opt_register(&kRow) >= 0);
++        CHECK(cellSysutilGetSystemParamInt(CELL_SYSUTIL_SYSTEMPARAM_ID_LANG, 0x100) == CELL_OK);
++        CHECK(s_last_w32 == CELL_SYSUTIL_LANG_SPANISH);
++        /* resolved once: a later change of the row does not reach the title (a PS3 cannot change it mid-game) */
++        CHECK(opt_set(opt_find("language"), "french") == OPT_SET_REFUSED);   /* env-locked anyway */
++        CHECK(cellSysutil_system_language() == CELL_SYSUTIL_LANG_SPANISH);
++    } else if (!strcmp(mode, "russian")) {           /* TSL_LANGUAGE=russian: not one of the row's values */
++        CHECK(opt_register(&kRow) >= 0);
++        CHECK(cellSysutil_system_language() == CELL_SYSUTIL_LANG_ENGLISH_US);
++    } else if (!strcmp(mode, "auto")) {              /* no env: the default auto, this machine's UI language */
++        CHECK(opt_register(&kRow) >= 0);
++        const s32 got = cellSysutil_system_language();
++        CHECK(got == cellSysutil_lang_auto(GetUserDefaultUILanguage(), kRow.values));
++        CHECK(got == CELL_SYSUTIL_LANG_ENGLISH_US || got == CELL_SYSUTIL_LANG_FRENCH ||
++              got == CELL_SYSUTIL_LANG_SPANISH || got == CELL_SYSUTIL_LANG_PORTUGUESE_PT);
++    }
++    printf("child %s: %d checks, %d failed\n", mode, g_checks, g_fail);
++    return g_fail ? 1 : 0;
++}
++
++static int run_child(const char* self, const char* mode, const char* env)
++{
++    char cmd[2048];
++    _putenv_s("TSL_LANGUAGE", env ? env : "");
++    snprintf(cmd, sizeof cmd, "\"\"%s\" --child %s\"", self, mode);
++    return system(cmd);
++}
++
++int main(int argc, char** argv)
++{
++    vm_base = s_mem;
++    _putenv_s("OPTIONS_CONFIG", "none");
++    if (argc > 2 && !strcmp(argv[1], "--child")) return child(argv[2]);
++
++    /* keys: index = CELL_SYSUTIL_LANG_*, round trip, out of range */
++    for (s32 i = 0; i < CELL_SYSUTIL_LANG_COUNT; i++) CHECK(cellSysutil_lang_from_key(cellSysutil_lang_key(i)) == i);
++    CHECK(!strcmp(cellSysutil_lang_key(CELL_SYSUTIL_LANG_RUSSIAN), "russian"));
++    CHECK(!strcmp(cellSysutil_lang_key(CELL_SYSUTIL_LANG_ENGLISH_GB), "english_uk"));
++    CHECK(!strcmp(cellSysutil_lang_key(CELL_SYSUTIL_LANG_PORTUGUESE_BR), "portuguese_br"));
++    CHECK(cellSysutil_lang_key(-1) == NULL && cellSysutil_lang_key(CELL_SYSUTIL_LANG_COUNT) == NULL);
++    CHECK(cellSysutil_lang_from_key("klingon") == -1 && cellSysutil_lang_from_key(NULL) == -1);
++
++    /* Windows LANGIDs */
++    CHECK(cellSysutil_lang_from_windows(0x0409) == CELL_SYSUTIL_LANG_ENGLISH_US);
++    CHECK(cellSysutil_lang_from_windows(0x1009) == CELL_SYSUTIL_LANG_ENGLISH_US);   /* en-CA */
++    CHECK(cellSysutil_lang_from_windows(0x0809) == CELL_SYSUTIL_LANG_ENGLISH_GB);
++    CHECK(cellSysutil_lang_from_windows(0x0C09) == CELL_SYSUTIL_LANG_ENGLISH_GB);   /* en-AU */
++    CHECK(cellSysutil_lang_from_windows(0x0419) == CELL_SYSUTIL_LANG_RUSSIAN);
++    CHECK(cellSysutil_lang_from_windows(0x040C) == CELL_SYSUTIL_LANG_FRENCH);
++    CHECK(cellSysutil_lang_from_windows(0x0C0C) == CELL_SYSUTIL_LANG_FRENCH);       /* fr-CA */
++    CHECK(cellSysutil_lang_from_windows(0x080A) == CELL_SYSUTIL_LANG_SPANISH);      /* es-MX */
++    CHECK(cellSysutil_lang_from_windows(0x0C0A) == CELL_SYSUTIL_LANG_SPANISH);
++    CHECK(cellSysutil_lang_from_windows(0x0416) == CELL_SYSUTIL_LANG_PORTUGUESE_BR);
++    CHECK(cellSysutil_lang_from_windows(0x0816) == CELL_SYSUTIL_LANG_PORTUGUESE_PT);
++    CHECK(cellSysutil_lang_from_windows(0x0411) == CELL_SYSUTIL_LANG_JAPANESE);
++    CHECK(cellSysutil_lang_from_windows(0x0412) == CELL_SYSUTIL_LANG_KOREAN);
++    CHECK(cellSysutil_lang_from_windows(0x0404) == CELL_SYSUTIL_LANG_CHINESE_T);
++    CHECK(cellSysutil_lang_from_windows(0x0C04) == CELL_SYSUTIL_LANG_CHINESE_T);    /* zh-HK */
++    CHECK(cellSysutil_lang_from_windows(0x0804) == CELL_SYSUTIL_LANG_CHINESE_S);
++    CHECK(cellSysutil_lang_from_windows(0x0407) == CELL_SYSUTIL_LANG_GERMAN);
++    CHECK(cellSysutil_lang_from_windows(0x0410) == CELL_SYSUTIL_LANG_ITALIAN);
++    CHECK(cellSysutil_lang_from_windows(0x0413) == CELL_SYSUTIL_LANG_DUTCH);
++    CHECK(cellSysutil_lang_from_windows(0x0415) == CELL_SYSUTIL_LANG_POLISH);
++    CHECK(cellSysutil_lang_from_windows(0x041F) == CELL_SYSUTIL_LANG_TURKISH);
++    CHECK(cellSysutil_lang_from_windows(0x041D) == CELL_SYSUTIL_LANG_SWEDISH);
++    CHECK(cellSysutil_lang_from_windows(0x0414) == CELL_SYSUTIL_LANG_NORWEGIAN);    /* nb-NO */
++    CHECK(cellSysutil_lang_from_windows(0x0814) == CELL_SYSUTIL_LANG_NORWEGIAN);    /* nn-NO */
++    CHECK(cellSysutil_lang_from_windows(0x0406) == CELL_SYSUTIL_LANG_DANISH);
++    CHECK(cellSysutil_lang_from_windows(0x040B) == CELL_SYSUTIL_LANG_FINNISH);
++    CHECK(cellSysutil_lang_from_windows(0x0422) == -1);                             /* Ukrainian: no PS3 language */
++    CHECK(cellSysutil_lang_from_windows(0) == -1);
++
++    /* auto against inFamous 2's list */
++    const char* const v = kRow.values;
++    CHECK(cellSysutil_lang_auto(0x0409, v) == CELL_SYSUTIL_LANG_ENGLISH_US);
++    CHECK(cellSysutil_lang_auto(0x0809, v) == CELL_SYSUTIL_LANG_ENGLISH_US);   /* UK -> the US sibling */
++    CHECK(cellSysutil_lang_auto(0x040C, v) == CELL_SYSUTIL_LANG_FRENCH);
++    CHECK(cellSysutil_lang_auto(0x080A, v) == CELL_SYSUTIL_LANG_SPANISH);
++    CHECK(cellSysutil_lang_auto(0x0416, v) == CELL_SYSUTIL_LANG_PORTUGUESE_PT); /* pt-BR -> Portuguese (the game: brazilian) */
++    CHECK(cellSysutil_lang_auto(0x0816, v) == CELL_SYSUTIL_LANG_PORTUGUESE_PT);
++    CHECK(cellSysutil_lang_auto(0x0419, v) == CELL_SYSUTIL_LANG_ENGLISH_US);   /* not offered */
++    CHECK(cellSysutil_lang_auto(0x0411, v) == CELL_SYSUTIL_LANG_ENGLISH_US);
++    CHECK(cellSysutil_lang_auto(0x0422, v) == CELL_SYSUTIL_LANG_ENGLISH_US);   /* no PS3 language */
++    CHECK(cellSysutil_lang_auto(0x0409, NULL) == CELL_SYSUTIL_LANG_ENGLISH_US);
++    /* a title that offers every language takes them as they are; one offering only Chinese S gets it for T */
++    CHECK(cellSysutil_lang_auto(0x0419, "auto|russian|english_us") == CELL_SYSUTIL_LANG_RUSSIAN);
++    CHECK(cellSysutil_lang_auto(0x0809, "auto|english_uk|english_us") == CELL_SYSUTIL_LANG_ENGLISH_GB);
++    CHECK(cellSysutil_lang_auto(0x0404, "auto|chinese_s") == CELL_SYSUTIL_LANG_CHINESE_S);
++    CHECK(cellSysutil_lang_auto(0x0816, "auto|portuguese_br") == CELL_SYSUTIL_LANG_PORTUGUESE_BR);
++    /* whole words only: "portuguese" is not "portuguese_br" */
++    CHECK(cellSysutil_lang_auto(0x0416, "auto|portuguese_brx") == CELL_SYSUTIL_LANG_ENGLISH_US);
++
++    /* the store row, each in a fresh process */
++    CHECK(run_child(argv[0], "norow", NULL) == 0);
++    CHECK(run_child(argv[0], "spanish", "spanish") == 0);
++    CHECK(run_child(argv[0], "russian", "russian") == 0);
++    CHECK(run_child(argv[0], "auto", NULL) == 0);
++
++    printf("test_sysutil_lang: %d checks, %d failed\n", g_checks, g_fail);
++    return g_fail ? 1 : 0;
 +}
 diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
 index cdb0464..38fac23 100644

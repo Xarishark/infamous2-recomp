@@ -162,10 +162,16 @@ $optline = ($opts | ForEach-Object { "`"$_`"" }) -join " "
 Step "build (long: the lifted code is huge)"
 $cl  = $clang -replace '\\', '/'
 $bat = Join-Path $env:TEMP "infamous2_build_$PID.bat"     # per process: two builds never share it
+# Paths and options reach the batch file as environment variables, not as its text: the file is ASCII (cmd reads
+# it in the console code page), so a path with a letter outside ASCII written into it would arrive as '?'.
+# cmd expands %VAR% from the (Unicode) environment unchanged.
+$env:IF2_BUILD_VCVARS = $vcvars
+$env:IF2_BUILD_CC = $cl
+$env:IF2_BUILD_OPTS = $optline
 @"
 @echo off
-call "$vcvars" >nul || exit /b 1
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=$cl" "-DCMAKE_CXX_COMPILER=$cl" $optline || exit /b 1
+call "%IF2_BUILD_VCVARS%" >nul || exit /b 1
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%IF2_BUILD_CC%" "-DCMAKE_CXX_COMPILER=%IF2_BUILD_CC%" %IF2_BUILD_OPTS% || exit /b 1
 cmake --build build || exit /b 1
 "@ | Set-Content -Encoding ASCII $bat
 cmd /c "`"$bat`" 2>&1"

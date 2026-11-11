@@ -403,6 +403,21 @@ const opt_def kIf2Rows[] = {
       "further away at a CPU cost.",
       OPT_FLOAT, OPT_LIVE, nullptr, nullptr, 0.5, 2.0, 0.05, "1.0", "IF2_DETAIL", nullptr,
       { "1.0", "0.75", "1.0", "1.0", "1.25" }, OPT_F_ENHANCEMENT, "if2", nullptr },
+    /* The PS3 system language the game is told (cellSysutilGetSystemParamInt LANG, libs/system/cellSysutil.c),
+     * read once at boot (0x9E7C8). The game picks its language from it within its edition's list, chosen by the
+     * TITLE_ID (0x9DFF8 matches it against the game's SKU list, the strings at 0x744B02; the language lists at
+     * 0x930A00, the pick in 0x9D9DC). BCUS98125 offers english, french, latino and brazilian (system Spanish ->
+     * latino, Portuguese -> brazilian through the pairs at 0x7449E0); any other system language -- Portuguese
+     * (Brazil), English (UK) and Turkish too, which it reads as none (> 16) -- plays in English. Only the four
+     * that change something are offered (docs/NOTES.md 2026-11-11). Values: cellSysutil_lang_key. */
+    { "language", "system_language|lang", "options", "system", "System", "Language", "Language",
+      "The PS3 system language the game sees: menus, subtitles and voices follow it, as on a PS3 set to that "
+      "language. This edition (BCUS98125) has English, French, Latin American Spanish and Brazilian Portuguese; "
+      "on a PS3 set to any other language it plays in English. Auto: the Windows display language when it is one of "
+      "these, else English. Takes effect at the next launch (the game reads it once, at start).",
+      OPT_ENUM, OPT_RESTART, "auto|english_us|french|spanish|portuguese",
+      "Auto (Windows language)|English|French|Spanish (Latin America)|Portuguese (Brazil)",
+      0, 0, 0, "auto", "IF2_LANGUAGE", nullptr, IF2_NOPRESET, 0, "cellSysutil", nullptr },
 };
 
 opt_id g_opt_lod = -1, g_opt_fmv = -1, g_opt_detail = -1;

@@ -63,6 +63,10 @@ Captured from the port running on Windows (2560x1080 monitor); cropped and resiz
   *PC Settings* and *Quit Game*: frame-rate cap and frame pacing, variable refresh, anisotropic
   filtering, anti-aliasing and sharpening, upscaling filters, shadow filtering, an FPS counter, volume
   and more -- applied live and saved to `config/options.ini`.
+- **Language,** as a PS3's system language picks it: English, French, Latin American Spanish or Brazilian
+  Portuguese, text and voices -- the languages this edition (BCUS98125) plays in. *Auto* (the default)
+  follows the Windows display language; *PC Settings > System > Language* or `language = ...` in
+  `options.ini` (`IF2_LANGUAGE`) chooses one, from the next launch.
 - **Performance work.** RSX command processing with a separate render thread, lifted and
   register-cached SPU job code, shader and pipeline caches (no compile hitches after the first time),
   write-watched texture caching, CPU core placement for big-cache CPUs. On the test PC (Ryzen 7 9800X3D,
@@ -119,6 +123,11 @@ very welcome (each session's `logs\play-*-issues.txt` records your CPU, GPU and 
    of its own, e.g. `C:\Games\inFamous2Recomp`. It holds this repository with `inFamous2Launcher.exe`
    already inside (no game files). Or `git clone` the repository and build the launcher in a second with
    `tools\build_launcher.cmd` (it uses the C# compiler built into Windows).
+   **The folder:** spaces in its path are fine (`C:\Users\First Last\Games\...`). Two things are not, and the
+   launcher says so at startup: letters your Windows language's code page cannot spell (the game opens its
+   files through it; e.g. Cyrillic or Chinese folder names on an English Windows), and a path over 150
+   characters (the build's deepest files would pass Windows' 260-character limit). A short folder such as
+   `C:\Games\inFamous2Recomp` avoids both.
 2. Run **`inFamous2Launcher.exe`**. The first time, it asks for your files:
    - the **disc folder** (the one holding `PS3_GAME`),
    - the **update 1.04 folder** (`BCUS98125`, holding `PARAM.SFO` and `USRDIR`),
@@ -215,6 +224,9 @@ above; **a full playthrough has not been verified yet.** It is a young port; exp
 
 - Only **BCUS98125** with **update 1.04** (or its 1.00 disc EBOOT) is supported; other regions and the
   updates 1.01-1.03 have no title-specific values and are refused.
+- **Languages:** the disc also holds Russian, German, Italian, Polish, Japanese and others, but the US edition
+  never offers them: on a PS3 set to one of those it plays in English, and so does the port (`docs/NOTES.md`,
+  2026-11-11).
 - **Windows only.** The toolkit builds on Linux, but there is no renderer there.
 - **CPU-bound.** The SPU work runs on CPU cores; weaker CPUs see lower frame rates in heavy scenes.
   The game logic is the PS3's (a 30 fps design); the frame-rate cap is in the options.

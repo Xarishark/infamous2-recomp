@@ -1276,6 +1276,7 @@ external/ps3recomp/libs/system/cellSysutil.c:s_cache_mounted SAVE # SUTL sysutil
 external/ps3recomp/libs/system/cellSysutil.c:s_disc_change_cb SAVE # SUTL sysutil disc_change_cb (the guest OPD)
 external/ps3recomp/libs/system/cellSysutil.c:s_disc_change_arg SAVE # SUTL sysutil disc_change_arg (guest value)
 external/ps3recomp/libs/system/cellSysutil.c:s_pump_seen SAVE # SUTL sysutil: the title pumps sysutil (cellMsgDialog defers to it)
+external/ps3recomp/libs/system/cellSysutil.c:s_sys_lang BOOT # the system language: resolved once from the language setting (the title reads it once at boot; a state keeps the language it was made in, in guest memory)
 external/ps3recomp/libs/system/cellSysutil.c:cellDiscGameGetBootDiscInfo.s_disc BOOT # PS3_DISCGAME_BOOT, read once
 external/ps3recomp/libs/system/cellSysutil.c:s_ss_disc_change_cb KEEP # capture scratch
 external/ps3recomp/libs/system/cellSysutil.c:s_ss_disc_change_arg KEEP # capture scratch

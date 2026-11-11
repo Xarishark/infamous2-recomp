@@ -57,7 +57,14 @@ extern "C" void ps3_load_prx_modules(void)
         fprintf(stderr, "[infamous2] IF2_HLE_SPURS=1 -- not loading libsre\n");
         return;
     }
+    /* The project folder is the working directory (tools\run.ps1, the launcher, and a double-click: play mode
+     * changes to it), so generated\prx is found there first. The build's own absolute path (IF2_PRX_DIR) is only
+     * the fallback: CMake spells it in UTF-8 and fopen reads the ANSI code page, so a folder with a letter outside
+     * ASCII ("...\Foelder" with an umlaut) was not found and the game ran without libsre (issue #2). */
     const char* dir = getenv("IF2_PRX_DIR");
+    if (!dir || !*dir) {
+        if (FILE* f = fopen("generated/prx/libsre.linked.bin", "rb")) { fclose(f); dir = "generated/prx"; }
+    }
     if (!dir || !*dir) dir = IF2_PRX_DIR;
     char path[1024];
     snprintf(path, sizeof path, "%s/libsre.linked.bin", dir);

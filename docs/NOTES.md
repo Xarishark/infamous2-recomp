@@ -1,6 +1,107 @@
 # Bring-up notes
 
 Dated log of what was tried and where each run stopped. Newest first.
+## 2026-11-11 — Issue #2: the build and the game from a folder with spaces (and a deep or non-ASCII folder)
+CMakeLists.txt, tools/build.ps1, tools/run.ps1, src/stubs.cpp, ps3recomp libs/system/cellGame.c, launcher, README.md
+- **Reported:** "Compile the game" failed with `RC1107: invalid usage` when the folder had a space. Cause: the target's
+  string defines with paths (`IF2_PRX_DIR="C:/Users/First Last/..."`, `IF2_DEFAULT_EBOOT`) went to rc.exe too
+  (app.rc), which cannot take them. Fix: both are `$<$<COMPILE_LANGUAGE:C,CXX>:...>`; app.rc gets IF2_EBOOT_V104,
+  IF2_HAVE_LIBSRE, IF2_HAVE_ICON only, and the icon still builds.
+- **Tested for real:** a `git archive` of the working tree in `...\space test\Földer Name\inFamous2Recomp`
+  (149 characters), game files set up as the launcher's Import does (a junction `game\disc\PS3_GAME` to the disc,
+  read only; copies of the update folder and libsre.prx), the launcher built there with tools\build_launcher.cmd,
+  then every step the way the launcher runs it (`powershell -File tools\build.ps1 -Step <id>`, cwd = the folder):
+  setup (clone from GitHub + apply), check, analyze, lift, libsre, jobs, build -- all exit 0 -- and the game through
+  tools\run.ps1. Three more problems turned up and are fixed:
+  - the game's content root (cellGame, host /dev_hdd0/game) was built in a 128-byte buffer (the guest's
+    CELL_GAME_PATH_MAX): a deep folder's HDD install went to a folder named after the first 127 bytes
+    (`...\space test\Földe`) and the game spun at boot. Host-side buffers are CELL_GAME_HOST_PATH_MAX (1024) now;
+    guest paths keep 128. (Not save-state data: those statics are KEEP / BOOT.)
+  - libsre was looked up at the build's absolute path, which CMake writes in UTF-8 while fopen reads the ANSI code
+    page: with "ö" in the folder it was not found and the game ran without libsre (cellSpurs HLE: no gameplay).
+    stubs.cpp now tries `generated/prx` below the working directory first (run.ps1, the launcher and play mode all
+    run from the project folder), the baked path last.
+  - run.ps1 (and build.ps1) wrote paths into an ASCII batch file: "ö" became "?" (shown with a test batch: the
+    old form does not find the file, the new one does). Paths now reach the batch files as environment variables.
+  After the fixes, in that folder: libsre loaded, the content root whole, the first-boot HDD install done, READY
+  (checkpoint 03, Spanish, subtitles in the frame dumps).
+- **Guards:** the launcher checks its folder at startup (before anything builds a path below it) and in
+  `--detect-out`: letters the ANSI code page cannot spell (the runtime opens files through it -- e.g. a Cyrillic
+  folder on an English Windows) and a path over 150 characters (the build's deepest file is ~102 characters below
+  the folder, build\ps3recomp_sdk\CMakeFiles\...\atrac3plusdsp.cpp.obj, against Windows' 260) get a warning with a
+  suggested folder (`<drive>\Games\inFamous2Recomp`) and a Continue / quit choice. Tried: the spaced folder "ok", a
+  Cyrillic one and a 159-character one warned. README: a note on the folder. Not handled: a folder so deep that the
+  launcher exe itself is near 260 characters -- .NET fails to start it ("Fatal error") before any code runs.
+- Not run: the launcher's update installer from such a folder (it needs a newer release); read through: every path
+  it passes is quoted, and it works through .NET file APIs.
+
+## 2026-11-11 — Language: the PS3 system language as a setting (issue #1); the US edition plays in four languages, Russian is not one of them
+EBOOT: BCUS98125 update 1.04 | ps3recomp cellSysutil.{c,h} (+ libs/system/tests/test_sysutil_lang.c), src/infamous2_hooks.cpp
+(row `language`), config/ss_manifest.txt, README.md
+- **Asked:** issue #1 "add in game rus" (Russian text and voice). The disc has every language pack
+  (`USRDIR\cache\psarc\<lang>.psarc`, the voices: 8656 `/dialogue/*.ogg` each; `<lang>_text.psarc` on the disc and,
+  newer, in the 1.04 update's `patch\psarc`: `/subtitle/*.bsub` and the UI text), and a PS3 picks the language from
+  its system language. Our cellSysutilGetSystemParamInt hard-coded LANG = English (US).
+- **How the game picks (1.04, read in the lifted code):** 0x9E7C8 (one call, at boot, from 0x1EFB1C) reads TITLE_ID
+  (cellGameGetParamString 100), matches it against the game's SKU list (0x9DFF8; the strings at 0x744B02: BCUS98125,
+  BCES01143, BCES01144, BCES01229, BCAS20181, BCJS30075, demos...) -> its edition (+0), then reads the system
+  parameters LANG (-> +8), ENTER_BUTTON_ASSIGN, DATE / TIME_FORMAT and 0x121 in one loop, then 0x9D9DC picks the
+  language (+0xC): a system language over 16 (Portuguese (Brazil) 17, English (UK) 18, Turkish 19) counts as none;
+  it is looked up in the edition's list (0x930A00 + 8 x edition: {count, list}), equal or one of four pairs (0x7449E0:
+  british~english, latino~spanish, brazilian~portuguese, chinese~chinese_s); no match = the list's first entry.
+  The names (0x931244, game index = PS3 index for 0..16, then 17 british, 18 latino, 19 brazilian, 20 turkish) give
+  `<name>_text.psarc` and, unless 0x1B0DF8 says the language has no voices (korean, chinese, british), `<name>.psarc`
+  (0x9DDC4; a flag at +0x954 of another object can force English voices).
+  Edition lists: US (BCUS98125) english, french, latino, brazilian; Europe (BCES01143) british, french, italian,
+  german, spanish, dutch, polish, portuguese, russian; BCES01144 british; BCES01229 turkish; Asia english, korean,
+  chinese; Japan japanese, english (and a Europe list with turkish for one special case).
+  **So a US PS3 set to Russian runs this disc in English**, and so does every other language outside the four.
+- **Built:** the HLE answers LANG with `cellSysutil_system_language()`: a settings-store row `language` (registered by
+  the title; no row = English (US), as before), resolved once at the first query and logged
+  (`[cellSysutil] system language: spanish (language = spanish, <file>:2)`, `GetSystemParamInt(LANG) = 3 (spanish)`).
+  Toolkit API: `cellSysutil_lang_key` / `_from_key` (the PS3 languages 0..19; there is no 20+ on a PS3),
+  `_from_windows` (a LANGID -> PS3 language: en-GB/AU/NZ/IE/ZA/IN -> English (UK), pt-BR -> Portuguese (Brazil), zh-TW/HK/MO
+  -> Chinese (T), ...), `_lang_auto` (that language if the row offers it, else its sibling -- Portuguese PT/BR, English
+  US/UK, Chinese T/S --, else English (US)). The inFamous 2 row (System > Language, OPT_RESTART, env IF2_LANGUAGE,
+  alias system_language / lang): auto (default) | english_us | french | spanish | portuguese, labelled Auto (Windows
+  language), English, French, Spanish (Latin America), Portuguese (Brazil) -- the four system languages that change
+  something in this edition (Portuguese (Brazil) as a system language gives English here: the > 16 rule; Auto maps a
+  pt-BR Windows to Portuguese, which gives the Brazilian pack). Restart: the game reads it once (one call site; one
+  `GetSystemParamInt(LANG)` line per run), so the row says "takes effect at the next launch"; no live switching.
+- Not language-dependent here: GetSystemParamString (the game asks NICKNAME / CURRENT_USERNAME only), PARAM.SFO
+  (no TITLE_xx keys: one title in every language), the enter button (a separate PS3 setting: unchanged, Cross), the
+  save data (the game writes its own titles in the current language; loading does not depend on them -- below). The
+  story FMVs carry 19 audio tracks and the Bink player is the game's own lifted code: it picks the track.
+- In game (checkpoint 03 boat polycut, scratch options.ini / caches / save states, PLAY_ISSUES=0):
+  - each offered language, a fresh boot with `language = X` in a scratch options.ini (runs m_*, p_*): english_us ->
+    english.psarc + english_text.psarc; french -> french + french_text; spanish -> latino + latino_text; portuguese ->
+    brazilian + brazilian_text; one `GetSystemParamInt(LANG)` per run. Frame dumps: the boat polycut's subtitles
+    ("Zeke, déplace ce bateau au moindre problème.", "Zeke, mueve el bote ante cualquier problema.", "Zeke, faz o barco
+    andar no primeiro sinal de problema.") and the pause menu (POUVOIRS / PODERES / PODERES ... with our PC SETTINGS and
+    QUIT GAME rows in English) in the game's font, accents right, no missing glyphs. The voices: the only voice pack
+    opened is the chosen one (8656 dialogue .ogg files; english.psarc is not opened), and the subtitle timing follows
+    each language's lines.
+  - the system languages this edition does not offer, before the list was cut (runs ru1, ru_new, p_*): russian (with the
+    checkpoint save and with no save), japanese, portuguese_br and english_uk all open english.psarc + english_text.psarc
+    and show English subtitles -- the game's own fallback, so they are not offered.
+  - PC Settings > System shows "LANGUAGE *" (4th row); Right on it: Spanish (Latin America) -> Portuguese (Brazil), the
+    footer "Changed: takes effect at the next launch.", `[options] language = portuguese (was spanish)`, the scratch file
+    `language = portuguese`; the next launch with that file: brazilian packs (c_change2, c_next). Auto with an empty
+    file: "auto (default): Windows UI language 0x0409 = english_us" (c_auto). IF2_LANGUAGE=french: locked, French
+    (c_env). `language = russian` in the file: "not a value of this setting: ignored".
+  - Saves: the checkpoint save (written in English) boots and loads in French, Spanish and Portuguese; a save the game
+    wrote in a French session ("(Sauvegarde automatique) 3. Élan en avant") boots in Spanish and in English
+    (d_frsave_*). Save states: one made in a French session loads in an English session and in a French one (and across
+    a rebuild, with the usual warning); the loaded moment keeps its French text and voice pack (the language lives in
+    guest memory and the open files), as expected -- the next launch is English again.
+- Tests: test_sysutil_lang (new, 72 checks + 4 child processes: keys, LANGIDs, auto against this title's list and
+  others, the row: none / env / a value not offered / auto), test_options_store 366, test_ovl_menu 1371, test_ss_libs
+  PASS (it links cellSysutil.c); manifest gate 4081 statics, 0 unclassified (s_sys_lang BOOT).
+- **Russian (issue #1) -- not done, a decision:** the data works: an experiment (scratch only, not kept) set the
+  edition word to Europe at the LANG query, and Russian booted with russian.psarc + russian_text.psarc and Cyrillic
+  subtitles in the game's font ("Зик, чуть что - сразу уводи лодку."). Offering it means telling the game it is the
+  European edition -- not what a US PS3 does -- so it is left out.
+
 ## 2026-11-03 — S2: the lighting job's generated SPU code, line by line; no exact codegen lever reaches 3% -- the one systematic waste (zero-lane Newton steps: ~11 M exact-fallback calls a second) is worth ~1-2%, and removing it on the fast path cost 4-5% (measured, nothing kept)
 EBOOT: BCUS98125 update 1.04 | no source change kept (probe builds -- line tables for the job TUs, window / fallback
 counters -- and four lever variants were made in local work files and reverted; build\infamous2.exe is the committed

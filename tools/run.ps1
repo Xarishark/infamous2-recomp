@@ -60,7 +60,7 @@ if (-not $exe) { throw "no build\infamous2.exe -- build first (README, step 5)" 
 $scoped = "CHECKPOINT", "CHECKPOINT_DIR", "CHECKPOINT_READY_FILE", "CHECKPOINT_READY_SHOT", "CHECKPOINT_SCRIPT",
           "CHECKPOINT_EXIT_AFTER", "CHECKPOINT_TIMEOUT", "CHECKPOINT_READY_ON", "CHECKPOINT_SKIP_MOVIES",
           "CHECKPOINT_AUTOSNAP", "IF2_SIGLOG", "IF2_TASKJUMP", "IF2_TASKJUMP_MODE", "IF2_TASKJUMP_AFTER",
-          "IF2_TASKLOG", "OPTIONS_CONFIG", "SS_LOAD", "SS_SAVE_AT", "SS_SAVE_SLOT"
+          "IF2_TASKLOG", "OPTIONS_CONFIG", "SS_LOAD", "SS_SAVE_AT", "SS_SAVE_SLOT", "IF2_RUN_EXE", "IF2_RUN_EBOOT"
 $saved = @{}
 foreach ($v in $scoped) { $saved[$v] = [Environment]::GetEnvironmentVariable($v, "Process") }
 
@@ -147,7 +147,11 @@ if ($Step -and $Step -ne "list" -and -not $Checkpoint) {
 # the first runtime log line killed the run.
 $ErrorActionPreference = "Continue"
 $bat = Join-Path $env:TEMP "infamous2_run_$PID.bat"     # per process: two runs never share it
-"@`"$((Resolve-Path $exe).Path)`" `"$($inputs.eboot)`" 2>&1" | Set-Content -Encoding ASCII $bat
+# The exe and EBOOT paths go in as environment variables, not as the file's text: the batch file is ASCII (cmd
+# reads it in the console code page), so a path with a letter outside ASCII would arrive as '?'.
+$env:IF2_RUN_EXE = (Resolve-Path $exe).Path
+$env:IF2_RUN_EBOOT = $inputs.eboot
+'@"%IF2_RUN_EXE%" "%IF2_RUN_EBOOT%" 2>&1' | Set-Content -Encoding ASCII $bat
 $code = $null
 try {
     & cmd.exe /c $bat | Tee-Object -FilePath $log

@@ -221,8 +221,10 @@ if(MSVC)
     target_link_options(${PROJECT_NAME} PRIVATE "/MAP:${CMAKE_BINARY_DIR}/infamous2.map")
 endif()
 if(PRX_SOURCES)
+    # C/C++ only: rc.exe (app.rc) gets the target's defines too, and a quoted path with a space in it
+    # ("C:/Users/First Last/...") is "RC1107: invalid usage" there (issue #2).
     target_compile_definitions(${PROJECT_NAME} PRIVATE
-        IF2_HAVE_LIBSRE=1 "IF2_PRX_DIR=\"${PRX_DIR}\"")
+        IF2_HAVE_LIBSRE=1 "$<$<COMPILE_LANGUAGE:C,CXX>:IF2_PRX_DIR=\"${PRX_DIR}\">")
     target_include_directories(${PROJECT_NAME} PRIVATE "${PS3RECOMP_DIR}/runtime/prx")
     if(LIBSRE_SPU)
         target_sources(${PROJECT_NAME} PRIVATE ${LIBSRE_SPU})
@@ -320,7 +322,8 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/analysis/inputs.json")
                             "addresses for the disc EBOOT and update 1.04 only (src/if2_version.h). Install 1.04.")
     endif()
 endif()
-target_compile_definitions(${PROJECT_NAME} PRIVATE IF2_DEFAULT_EBOOT="${_if2_eboot_rel}")
+# C/C++ only, as IF2_PRX_DIR above: string defines never reach rc.exe.
+target_compile_definitions(${PROJECT_NAME} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:IF2_DEFAULT_EBOOT=\"${_if2_eboot_rel}\">")
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${RECOMP_DIR}"                            # the generated ppu_recomp.h

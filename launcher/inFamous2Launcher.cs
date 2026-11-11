@@ -53,7 +53,7 @@ namespace Infamous2Launcher
     static class AppInfo
     {
         // The release this launcher belongs to: tools\make_release.ps1 refuses a tag that does not match it.
-        public const string Version = "0.1.2";
+        public const string Version = "0.1.3";
         public const string Repo = "bhuiyah/infamous2-recomp";
         public const string ApiLatest = "https://api.github.com/repos/" + Repo + "/releases/latest";
         public const string ReleasesPage = "https://github.com/" + Repo + "/releases";
@@ -2091,9 +2091,39 @@ namespace Infamous2Launcher
         }
 
         // ---------------------------------------------------------- running the steps
+        // The folder the port lives in. Spaces are fine everywhere (issue #2). What is not: letters the Windows
+        // ANSI code page cannot spell (the game's runtime opens files through the ANSI API, so such a folder is
+        // not found at all), and a folder so deep that the build's longest paths (about 105 characters below the
+        // folder: build\ps3recomp_sdk\CMakeFiles\...\atrac3plusdsp.cpp.obj) pass Windows' 260-character limit.
+        public const int MaxRootLength = 150;
+        public static string FolderProblem(string root)
+        {
+            var problems = new List<string>();
+            try
+            {
+                var ansi = Encoding.GetEncoding(Encoding.Default.CodePage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+                ansi.GetBytes(root);
+            }
+            catch (EncoderFallbackException)
+            {
+                problems.Add("Its path has letters that Windows' code page for programs that are not Unicode (" + Encoding.Default.WebName +
+                             ") cannot spell, and the game opens its files through that code page: it would not find them.");
+            }
+            if (root.Length > MaxRootLength)
+                problems.Add("Its path is " + root.Length + " characters long; above " + MaxRootLength + " the build's deepest files pass " +
+                             "Windows' 260-character path limit and the compiler fails.");
+            if (problems.Count == 0) return null;
+            string suggest = Path.Combine(Path.GetPathRoot(root) ?? @"C:\", @"Games\inFamous2Recomp");
+            return "This folder will not work for the build or the game:\r\n\r\n    " + root + "\r\n\r\n- " + string.Join("\r\n- ", problems) +
+                   "\r\n\r\nMove the whole folder somewhere short with plain letters, for example " + suggest +
+                   " (spaces are fine), and start the launcher from there.";
+        }
+
         void StartBuild(bool all)
         {
             if (building) return;
+            string folder = FolderProblem(root);   // asked at startup (Program.Main); the build log says it again
+            if (folder != null) Append("folder check: " + folder.Replace("\r\n", " "));
             try
             {
                 var drive = new DriveInfo(Path.GetPathRoot(root));
@@ -2338,6 +2368,8 @@ namespace Infamous2Launcher
         {
             var sb = new StringBuilder();
             sb.AppendLine("root: " + root);
+            string folder = FolderProblem(root);
+            sb.AppendLine("folder check: " + (folder == null ? "ok" : folder.Replace("\r\n", " ")));
             foreach (var p in Prereqs.Detect(o))
                 sb.AppendLine("prereq " + p.Id + ": " + (p.Ok ? "ok " + p.Found : "MISSING" + (p.Note != null ? " (" + p.Note + ")" : "")) + "  [winget: " + Prereqs.WingetCommand(p) + "]");
             sb.AppendLine("winget: " + (Prereqs.WingetExe() ?? "not found"));
@@ -2391,11 +2423,22 @@ namespace Infamous2Launcher
                                 "inFamous 2 launcher", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
+            // Before anything builds a path below the folder: a folder the build or the game cannot use is said up
+            // front, with a suggestion, instead of failing late (issue #2). Too deep a folder can also make the
+            // launcher's own path handling fail (PathTooLongException), so nothing below runs before this.
+            string folder = MainForm.FolderProblem(root);
             if (o.DetectOut != null)
             {
-                File.WriteAllText(o.DetectOut, MainForm.Report(root, o));
+                string report;
+                try { report = MainForm.Report(root, o); }
+                catch (Exception ex) { report = "root: " + root + "\r\nfolder check: " + (folder ?? "ok").Replace("\r\n", " ") + "\r\nreport failed: " + ex.Message + "\r\n"; }
+                File.WriteAllText(o.DetectOut, report);
                 return 0;
             }
+            if (folder != null &&
+                MessageBox.Show(folder + "\r\n\r\nContinue in this folder anyway?", "inFamous 2 launcher", MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Warning) != DialogResult.Yes)
+                return 1;
             Application.Run(new MainForm(root, o));
             return 0;
         }
