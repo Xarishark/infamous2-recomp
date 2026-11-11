@@ -1,0 +1,69 @@
+# inFamous 2 (Sucker Punch, 2011) -- ps3recomp configuration
+#
+# Reference target: BCUS98125 (North America, disc) + latest title update.
+#
+# The [modules] list below is a STARTING GUESS for a large 2011 first-party
+# open-world title. Replace it with the real import set once tools/analyze.sh
+# has run -- analysis/import_coverage.md lists every library the EBOOT imports
+# and which functions ps3recomp does not answer yet. Keep the per-module import
+# counts in the comments, like the VF5 port does: they are the porting budget.
+
+[input]
+elf_path = "game/disc/PS3_GAME/USRDIR/EBOOT.elf"   # check_inputs.py may pick the update EBOOT instead
+sfo_path = "game/disc/PS3_GAME/PARAM.SFO"
+
+[output]
+output_dir = "generated/ppu/"
+func_prefix = "recomp_"
+generate_func_table = true
+
+[modules]
+cellSysutil   = "hle"
+cellSysmodule = "hle"
+sysPrxForUser = "hle"
+cellFs        = "hle"   # streaming open world: expect heavy async file I/O
+cellGame      = "hle"
+cellSaveData  = "hle"
+cellPad       = "hle"
+cellGem       = "hle"   # PS Move support -- HLE reports no device; game must take its pad path
+cellAudio     = "hle"
+cellGcmSys    = "hle"
+cellResc      = "hle"
+cellSpurs     = "hle"   # almost certainly the long pole (SPU jobs: animation, physics, audio, culling)
+cellSync      = "hle"
+cellSync2     = "hle"
+cellRtc       = "hle"
+cellL10n      = "hle"
+cellNetCtl    = "hle"   # UGC level sharing servers are long gone: offline paths only
+cellSysutilNp = "hle"
+sceNp         = "hle"
+sceNpTrophy   = "hle"
+
+[memory]
+main_ram_mb = 256
+vram_mb = 256
+thread_stack_kb = 1024
+
+[threading]
+max_ppu_threads = 64
+max_spu_threads = 6
+use_host_threads = true
+
+[graphics]
+backend = "d3d12"   # the only backend that draws a real game today
+width = 1280        # inFamous 2 renders 720p on PS3
+height = 720
+vsync = "on"
+scale_factor = 1
+
+[audio]
+backend = "wasapi"
+sample_rate = 48000
+buffer_size = 512
+
+[debug]
+log_hle_calls = true
+log_missing_nids = true
+break_on_unimplemented = false
+dump_disassembly = false
+breakpoint_address = 0

@@ -1,0 +1,6 @@
+# Keep line endings as the tools need them, whatever core.autocrlf says.
+*.sh    text eol=lf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+# the toolkit patch carries CRLF and LF hunks byte for byte
+*.patch -text

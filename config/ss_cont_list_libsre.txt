@@ -1,0 +1,25 @@
+# Save-state continuations for libsre (the real SPURS library, lifted by
+# tools/lift_libsre.sh under the libsre_ prefix at 0x30000000). Same format as
+# config/ss_cont_list.txt (parse_cont_list in ppu_lifter.py). lift_libsre.sh
+# reads both lists; each lift keeps the return sites inside its own image, so
+# this file only ever affects the libsre lift: growing it needs
+#   bash tools/lift_libsre.sh --ppu-only        (seconds; no libsre.prx needed)
+# and a rebuild, never a relift of the EBOOT.
+# Grow it from tools/ss_census.py --strict (it prints the uncovered return
+# addresses of each parked chain) and from SS_SELFRESUME's "[ss-resume] missing"
+# lines (tools/ss_selfresume.py --missing).
+
+# --- 1. the SPURS handler threads (census 2026-10-15: 4 of the 24 threads in
+#     every gameplay stop; they park with only these frames on their stacks) ---
+# OPD 0x300313A4 -> libsre_func_3000B504: SpursHdlr1 (2 threads, sys_event_queue_receive)
+libsre_func_3000B504 libsre_func_3000BC4C libsre_func_3000BFB4 libsre_func_3000CAB8 libsre_func_3000CB40 libsre_func_3000D958
+# OPD 0x300312DC -> libsre_func_3000930C: SpursHdlr0 (2 threads, sys_spu_thread_group_join)
+libsre_func_3000930C libsre_func_3000BFB4 libsre_func_3000CAB8 libsre_func_3000DE98 libsre_func_3000E280 libsre_func_3000E5C4
+# [WAIT] return address seen in gameplay logs (125746 / 131107)
+0x3000B7B8
+
+# --- 2. game threads inside a libsre bridge (census 2026-10-20, New Marais: 1 of 104 stops) ---
+# fios mediathread 4 in cellSpursEventFlagWait (NID 0x373523D4) -> sys_event_queue_receive at 0x30015E5C.
+# A strict save still refuses a bridge park (the host bridge frame has no continuation); this covers the
+# libsre side of the chain for when bridge resume lands.
+libsre_func_30015C2C 0x30015E60

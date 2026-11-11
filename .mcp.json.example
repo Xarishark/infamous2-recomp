@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "C:\\path\\to\\re-tools\\ghidra-mcp-venv\\Scripts\\bridge-mcp-ghidra.exe",
+      "args": ["--transport", "stdio"],
+      "env": { "GHIDRA_MCP_URL": "http://127.0.0.1:8089" }
+    }
+  }
+}

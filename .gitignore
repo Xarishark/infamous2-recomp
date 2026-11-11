@@ -1,0 +1,106 @@
+# ---- Never commit game data, keys or anything derived from them ----------
+game/*
+!game/README.md
+analysis/
+generated/
+logs/
+# the in-game options' file (the player's choices; written by the game)
+config/options.ini
+config/options.ini.tmp
+/options.ini
+# the game's dev_hdd0 (installed data, saves, DLC licences) and testing checkpoints (copies of saves)
+gamedata/
+checkpoints/
+# save states (guest memory snapshots: game data) -- the window menu's Save/Load slots
+savestates/
+*.p3ss
+# texture dumps and texture packs (made from the disc's data; they live under gamedata/)
+textures/
+texdump/
+texpacks/
+# screenshots, F8 marks and frame dumps (pictures of the game)
+screenshots/
+*.png
+*.bmp
+*.dds
+# crash dumps (hold paths with the Windows user name)
+*.dmp
+# raw memory / local-store images the runtime can write (debug dumps of game code)
+recomp_spu_ls.bin
+*.bin
+# executables and firmware: never the game's, decrypted or not
+*.elf
+*.ELF
+*.self
+*.SELF
+*.sprx
+*.SPRX
+*.prx
+*.PRX
+*.pkg
+*.PKG
+*.pup
+*.PUP
+*.rap
+*.RAP
+*.rif
+*.RIF
+*.rifkey
+*.edat
+*.EDAT
+*.sdat
+*.SDAT
+*.iso
+*.ISO
+*.7z
+*.zip
+*.rar
+**/EBOOT.BIN
+**/PARAM.SFO
+dev_flash/
+dev_hdd0/
+firmware/
+
+# ---- Toolkit checkout (fetched by tools/setup.*) --------------------------
+external/
+
+# ---- Build -----------------------------------------------------------------
+build/
+# the disc build kept beside a title-update build (tools/build.ps1 -Disc otherwise)
+build-v100/
+build-pgo*/
+# PGO profiles: counters from running the game's code (derived data)
+pgo/
+*.profraw
+*.profdata
+out/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# ---- Launcher --------------------------------------------------------------
+# the built launcher (tools/build_launcher.cmd) and its own state / cache
+/inFamous2Launcher.exe
+/inFamous2Launcher.pdb
+.launcher/
+
+# ---- Tooling ---------------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
+
+# a developer's own SDAT key for the toolkit test test_ss_fsfd (never committed)
+sdat.key
+
+# Local MCP config (absolute paths to your machine) -- see .mcp.json.example
+.mcp.json
+
+# local shortcuts (machine-specific paths)
+*.lnk
