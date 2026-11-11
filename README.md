@@ -66,7 +66,10 @@ Captured from the port running on Windows (2560x1080 monitor); cropped and resiz
 - **Language,** as a PS3's system language picks it: English, French, Latin American Spanish or Brazilian
   Portuguese, text and voices -- the languages this edition (BCUS98125) plays in. *Auto* (the default)
   follows the Windows display language; *PC Settings > System > Language* or `language = ...` in
-  `options.ini` (`IF2_LANGUAGE`) chooses one, from the next launch.
+  `options.ini` (`IF2_LANGUAGE`) chooses one, from the next launch. Opt-in, beyond what a US console does:
+  *Language edition: Europe* (`language_edition = europe`, `IF2_LANGUAGE_EDITION`) gives the game's own
+  European language list instead -- English (UK), French, Italian, German, Spanish, Dutch, Polish, Portuguese
+  and Russian, text and voices, all on your US disc; only the language list changes (saves stay US saves).
 - **Performance work.** RSX command processing with a separate render thread, lifted and
   register-cached SPU job code, shader and pipeline caches (no compile hitches after the first time),
   write-watched texture caching, CPU core placement for big-cache CPUs. On the test PC (Ryzen 7 9800X3D,
@@ -81,7 +84,10 @@ Captured from the port running on Windows (2560x1080 monitor); cropped and resiz
 ## What you need
 
 - **Your own inFamous 2 (BCUS98125)** dumped from your own disc, plus **title update 1.04** installed
-  from your own console or PSN (the updates in order, or their 1.04 files).
+  from your own console or PSN (the updates in order, or their 1.04 files). **Only the US edition is supported
+  for now:** a European (BCES01143), UK (BCES01144) or other copy is refused at the file check -- the port's
+  title-specific code is made for the US build. For Russian and the other European languages, use a US copy
+  with *Language edition: Europe* (see Features).
 - **RPCS3** (free) to decrypt two files you own: the update's `EBOOT.BIN` -> `EBOOT.elf`, and the
   firmware's `dev_flash/sys/external/libsre.sprx` -> `libsre.prx` (install the official PS3 firmware in
   RPCS3 first). Step by step: [game/README.md](game/README.md).
@@ -225,8 +231,9 @@ above; **a full playthrough has not been verified yet.** It is a young port; exp
 - Only **BCUS98125** with **update 1.04** (or its 1.00 disc EBOOT) is supported; other regions and the
   updates 1.01-1.03 have no title-specific values and are refused.
 - **Languages:** the disc also holds Russian, German, Italian, Polish, Japanese and others, but the US edition
-  never offers them: on a PS3 set to one of those it plays in English, and so does the port (`docs/NOTES.md`,
-  2026-11-11).
+  never offers them: on a PS3 set to one of those it plays in English, and so does the port by default
+  (`docs/NOTES.md`, 2026-11-11). *Language edition: Europe* (opt-in) unlocks the European ones; Japanese,
+  Korean, Chinese and Turkish belong to other editions' lists and are not offered.
 - **Windows only.** The toolkit builds on Linux, but there is no renderer there.
 - **CPU-bound.** The SPU work runs on CPU cores; weaker CPUs see lower frame rates in heavy scenes.
   The game logic is the PS3's (a 30 fps design); the frame-rate cap is in the options.

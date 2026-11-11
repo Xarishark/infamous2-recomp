@@ -1401,6 +1401,7 @@ src/infamous2_hooks.cpp:ss_section_reg_kTitlOps BOOT # C++ static-init object of
 src/infamous2_hooks.cpp:g_opt_lod BOOT # settings-store row id (startup)
 src/infamous2_hooks.cpp:g_opt_fmv BOOT # settings-store row id (startup)
 src/infamous2_hooks.cpp:g_opt_detail BOOT # settings-store row id (startup)
+src/infamous2_hooks.cpp:g_lang_europe BOOT # language_edition = europe, read once at startup (a restart row); the language-table write it makes is guest memory, which a state carries
 src/infamous2_hooks.cpp:if2_fmv_quad.said DIAG # log once
 src/infamous2_hooks.cpp:if2_physfb_force.s_on BOOT # IF2_PHYSFB_FORCE, read once
 src/infamous2_hooks.cpp:if2_physfb_diag.s_on BOOT # IF2_PHYSFB, read once

@@ -403,21 +403,6 @@ const opt_def kIf2Rows[] = {
       "further away at a CPU cost.",
       OPT_FLOAT, OPT_LIVE, nullptr, nullptr, 0.5, 2.0, 0.05, "1.0", "IF2_DETAIL", nullptr,
       { "1.0", "0.75", "1.0", "1.0", "1.25" }, OPT_F_ENHANCEMENT, "if2", nullptr },
-    /* The PS3 system language the game is told (cellSysutilGetSystemParamInt LANG, libs/system/cellSysutil.c),
-     * read once at boot (0x9E7C8). The game picks its language from it within its edition's list, chosen by the
-     * TITLE_ID (0x9DFF8 matches it against the game's SKU list, the strings at 0x744B02; the language lists at
-     * 0x930A00, the pick in 0x9D9DC). BCUS98125 offers english, french, latino and brazilian (system Spanish ->
-     * latino, Portuguese -> brazilian through the pairs at 0x7449E0); any other system language -- Portuguese
-     * (Brazil), English (UK) and Turkish too, which it reads as none (> 16) -- plays in English. Only the four
-     * that change something are offered (docs/NOTES.md 2026-11-11). Values: cellSysutil_lang_key. */
-    { "language", "system_language|lang", "options", "system", "System", "Language", "Language",
-      "The PS3 system language the game sees: menus, subtitles and voices follow it, as on a PS3 set to that "
-      "language. This edition (BCUS98125) has English, French, Latin American Spanish and Brazilian Portuguese; "
-      "on a PS3 set to any other language it plays in English. Auto: the Windows display language when it is one of "
-      "these, else English. Takes effect at the next launch (the game reads it once, at start).",
-      OPT_ENUM, OPT_RESTART, "auto|english_us|french|spanish|portuguese",
-      "Auto (Windows language)|English|French|Spanish (Latin America)|Portuguese (Brazil)",
-      0, 0, 0, "auto", "IF2_LANGUAGE", nullptr, IF2_NOPRESET, 0, "cellSysutil", nullptr },
 };
 
 opt_id g_opt_lod = -1, g_opt_fmv = -1, g_opt_detail = -1;
@@ -439,10 +424,97 @@ void if2_opt_changed(opt_id id, const char* old_v, const char* new_v, void* user
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * Language. `language` is the PS3 system language the game is told (cellSysutilGetSystemParamInt LANG,
+ * libs/system/cellSysutil.c), read once at boot (0x9E7C8). The game picks its language from it within its
+ * edition's list: 0x9DFF8 matches TITLE_ID against the game's SKU list (the strings at 0x744B02) -> the
+ * edition word (+0 of the platform object); 0x9D9DC looks the system language up in that edition's list
+ * (kLangLists: {count, list} per edition), equal or one of the pairs at 0x7449E0 (british~english,
+ * latino~spanish, brazilian~portuguese, chinese~chinese_s); no match = the list's first entry; a system
+ * language over 16 (Portuguese (Brazil), English (UK), Turkish) counts as none. BCUS98125's list (edition 0):
+ * english, french, latino, brazilian.
+ *
+ * `language_edition = europe` (beyond a US PS3, opt-in) puts the game's own European list (edition 1, the
+ * BCES01143 one: british, french, italian, german, spanish, dutch, polish, portuguese, russian) into the US
+ * edition's slot of that table, once, before the game runs. The table is read by 0x9D9DC alone (its only
+ * reference, the TOC slot 0x9A10F4); the edition word itself, TITLE_ID and everything derived from them
+ * (ratings, splash, DLC, saves, trophies) stay US. docs/NOTES.md 2026-11-11 / 2026-11-12.
+ * -----------------------------------------------------------------------*/
+constexpr uint32_t kLangLists = IF2_EA(0x008D09D0, 0x00930A00);   /* {count, list} per edition */
+constexpr uint32_t kLangListUS = IF2_EA(0x006ECE14, 0x00744E44);  /* english french latino brazilian */
+constexpr uint32_t kLangListEU = IF2_EA(0x006ECE24, 0x00744E54);  /* british french ... portuguese russian */
+
+const opt_def kLangEditionRow =
+    { "language_edition", "edition", "options", "system", "System", "Language", "Language edition",
+      "Which edition's languages the game offers. US (original): this disc's edition, BCUS98125, as on a PS3 -- "
+      "English, French, Latin American Spanish and Brazilian Portuguese. Europe (beyond a US PS3): the game's own "
+      "European-edition list, whose packs this disc also holds -- English (UK), French, Italian, German, Spanish "
+      "(Spain), Dutch, Polish, Portuguese (Portugal), Russian. Only the language list changes: the game stays the US "
+      "edition (saves, title screens, DLC, trophies). Takes effect at the next launch.",
+      OPT_ENUM, OPT_RESTART, "us|europe", "US (original)|Europe (adds Russian, German, Italian, Polish, ...)",
+      0, 0, 0, "us", "IF2_LANGUAGE_EDITION", nullptr, IF2_NOPRESET, OPT_F_ENHANCEMENT, "if2", nullptr };
+
+const opt_def kLanguageUS =
+    { "language", "system_language|lang", "options", "system", "System", "Language", "Language",
+      "The PS3 system language the game sees: menus, subtitles and voices follow it, as on a PS3 set to that "
+      "language. This edition (BCUS98125) has English, French, Latin American Spanish and Brazilian Portuguese; "
+      "on a PS3 set to any other language it plays in English (Language edition: Europe offers more). Auto: the "
+      "Windows display language when it is one of these, else English. Takes effect at the next launch (the game "
+      "reads it once, at start).",
+      OPT_ENUM, OPT_RESTART, "auto|english_us|french|spanish|portuguese",
+      "Auto (Windows language)|English|French|Spanish (Latin America)|Portuguese (Brazil)",
+      0, 0, 0, "auto", "IF2_LANGUAGE", nullptr, IF2_NOPRESET, 0, "cellSysutil", nullptr };
+
+/* English (UK) is the system language english_uk (18): the game reads it as none and takes the list's first
+ * entry, british -- what a UK PS3 gets. Spanish and Portuguese are the European ones here. */
+const opt_def kLanguageEU =
+    { "language", "system_language|lang", "options", "system", "System", "Language", "Language",
+      "The PS3 system language the game sees, with Language edition: Europe (beyond a US PS3): menus, subtitles "
+      "and voices follow it. English (UK) has British text and the English voices. Auto: the Windows display "
+      "language when it is one of these (US English -> English (UK), Brazilian -> Portuguese), else English (UK). "
+      "Takes effect at the next launch (the game reads it once, at start).",
+      OPT_ENUM, OPT_RESTART, "auto|english_uk|french|italian|german|spanish|dutch|polish|portuguese|russian",
+      "Auto (Windows language)|English (UK)|French|Italian|German|Spanish (Spain)|Dutch|Polish|Portuguese (Portugal)|"
+      "Russian",
+      0, 0, 0, "auto", "IF2_LANGUAGE", nullptr, IF2_NOPRESET, 0, "cellSysutil", nullptr };
+
+bool g_lang_europe = false;
+
+/* The two rows: the edition first, then `language` with that edition's list (both restart rows, so the list
+ * is fixed for the session). A saved language the edition does not offer is not one of the row's values: the
+ * store logs it ("is not a value of this setting: ignored") and the row stays at Auto. */
+void if2_language_rows(void)
+{
+    opt_register(&kLangEditionRow);
+    const opt_id e = opt_find("language_edition");
+    g_lang_europe = e >= 0 && opt_i(e) == 1;
+    opt_register(g_lang_europe ? &kLanguageEU : &kLanguageUS);
+}
+
+/* After the EBOOT is in guest memory, before the game runs: with Europe, the US slot of the language-list
+ * table gets the European entry. Checked first: anything else there (another EBOOT) and nothing is written. */
+void if2_language_edition_apply(void)
+{
+    if (!g_lang_europe) return;
+    const uint32_t c0 = vm_read32(kLangLists), l0 = vm_read32(kLangLists + 4);
+    const uint32_t c1 = vm_read32(kLangLists + 8), l1 = vm_read32(kLangLists + 12);
+    if (c0 != 4 || l0 != kLangListUS || c1 != 9 || l1 != kLangListEU) {
+        fprintf(stderr, "[if2-lang] language edition Europe: the language table at 0x%08X is not this EBOOT's "
+                "({%u, 0x%08X}, {%u, 0x%08X}): left as it is (US languages)\n", kLangLists, c0, l0, c1, l1);
+        return;
+    }
+    vm_write32(kLangLists, c1);
+    vm_write32(kLangLists + 4, l1);
+    fprintf(stderr, "[if2-lang] language edition Europe: the US edition's language list (0x%08X) is the game's "
+            "European one now (%u languages); the edition, title id and saves stay US\n", kLangLists, c1);
+    fflush(stderr);
+}
+
 /* Before if2_aspect_install: registers the rows and logs the store's summary. */
 int if2_options_install(void)
 {
     for (const opt_def& r : kIf2Rows) opt_register(&r);
+    if2_language_rows();
     g_opt_lod = opt_find("lod");
     g_opt_fmv = opt_find("fmv");
     g_opt_detail = opt_find("detail");
@@ -672,6 +744,7 @@ extern "C" void infamous2_install_overrides(void)
      *   IF2_OVERRIDE("cellGemGetStatus", if2_cellGemGetStatus); n++;
      */
     n += if2_options_install();  /* settings store: this title's rows, the [options] summary */
+    if2_language_edition_apply();   /* language_edition = europe: the game's European language list */
     n += if2_aspect_install();   /* ultrawide: cellGcmGetConfiguration */
     if2_options_watch();         /* live lod / fmv / detail */
     if2_postfx_install();        /* anti-aliasing / sharpening: the scene-end and movie programs */

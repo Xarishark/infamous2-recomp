@@ -53,7 +53,7 @@ namespace Infamous2Launcher
     static class AppInfo
     {
         // The release this launcher belongs to: tools\make_release.ps1 refuses a tag that does not match it.
-        public const string Version = "0.1.3";
+        public const string Version = "0.1.4";
         public const string Repo = "bhuiyah/infamous2-recomp";
         public const string ApiLatest = "https://api.github.com/repos/" + Repo + "/releases/latest";
         public const string ReleasesPage = "https://github.com/" + Repo + "/releases";
@@ -192,6 +192,22 @@ namespace Infamous2Launcher
             { "f1c20717d6532dfb27e292a5db6cdf5a3218760b", "BCUS98125 disc EBOOT (1.00)" },
             { "7814ff1a87d7d3d10bd0e9627dc05ac353ed4162", "BCUS98125 update 1.04 EBOOT" },
         };
+        // The editions the game knows (its SKU list) -- for the message when a disc is not BCUS98125 (issue #3).
+        public static readonly Dictionary<string, string> Editions = new Dictionary<string, string>
+        {
+            { "BCUS98125", "North America" }, { "BCES01143", "Europe" }, { "BCES01144", "UK" }, { "BCES01229", "Turkey" },
+            { "BCAS20181", "Asia" }, { "BCJS30075", "Japan" },
+        };
+        public static string EditionOf(string id)
+        {
+            string n;
+            return (id ?? "?") + (id != null && Editions.TryGetValue(id, out n) ? " (" + n + ")" : " (not an edition this port knows)");
+        }
+        public const string Support = "This build supports only the US edition, BCUS98125, with title update 1.04. " +
+            "Russian, German, Italian, Polish and the other European languages are available on a US copy: " +
+            "PC Settings > System > Language edition: Europe.";
+        // tools\check_inputs.py's developer override: an unknown edition / EBOOT is a warning instead.
+        public static bool AllowUnknown { get { return Environment.GetEnvironmentVariable("IF2_ALLOW_UNKNOWN_EBOOT") == "1"; } }
         public static readonly Dictionary<string, string> KnownLibsre = new Dictionary<string, string>
         {
             { "c2f5d2dbf1c58eadcc3367dc34b28f80c4251a67", "libsre.prx the port was developed with" },
@@ -310,7 +326,7 @@ namespace Infamous2Launcher
                         var s = Ps3Files.ParseSfo(sfo);
                         string id; s.TryGetValue("TITLE_ID", out id);
                         if (id == "BCUS98125") f.Add(new Finding(0, "Disc: inFamous 2, BCUS98125 (North America)."));
-                        else f.Add(new Finding(1, "Disc: title id " + id + " -- this port targets BCUS98125; other regions are untested."));
+                        else f.Add(new Finding(Ps3Files.AllowUnknown ? 1 : 2, "Disc: this is " + Ps3Files.EditionOf(id) + ". " + Ps3Files.Support));
                         if (!Directory.Exists(Path.Combine(g, "USRDIR"))) f.Add(new Finding(2, "Disc: PS3_GAME has no USRDIR folder."));
                         else discGame = g;
                     }
@@ -354,7 +370,9 @@ namespace Infamous2Launcher
                         if (h == "7814ff1a87d7d3d10bd0e9627dc05ac353ed4162") f.Add(new Finding(0, "EBOOT: " + name + " (SHA-1 matches)."));
                         else f.Add(new Finding(2, "EBOOT: this is the " + name + "; decrypt the UPDATE's EBOOT.BIN (1.04) instead."));
                     }
-                    else f.Add(new Finding(1, "EBOOT: SHA-1 " + h.Substring(0, 12) + "... is not the known 1.04 EBOOT; the build may not match it."));
+                    else f.Add(new Finding(Ps3Files.AllowUnknown ? 1 : 2, "EBOOT: SHA-1 " + h.Substring(0, 12) + "... is not the BCUS98125 " +
+                        "update 1.04 EBOOT (another edition, or a damaged or wrongly decrypted dump): the build's title hooks would not " +
+                        "match it. " + Ps3Files.Support));
                     ebootPath = e2;
                 }
             }
@@ -2370,6 +2388,13 @@ namespace Infamous2Launcher
             sb.AppendLine("root: " + root);
             string folder = FolderProblem(root);
             sb.AppendLine("folder check: " + (folder == null ? "ok" : folder.Replace("\r\n", " ")));
+            if (o.Disc != null || o.Update != null || o.Eboot != null)
+            {
+                // the game-files dialog's own check on the files given with --disc / --update / --eboot / --libsre
+                string dg, ep, lp;
+                foreach (var x in GameFiles.Check(o.Disc, o.Update, o.Eboot, o.Libsre, out dg, out ep, out lp))
+                    sb.AppendLine("files " + (x.Level == 0 ? "[ok] " : x.Level == 1 ? "[!]  " : "[x]  ") + x.Text);
+            }
             foreach (var p in Prereqs.Detect(o))
                 sb.AppendLine("prereq " + p.Id + ": " + (p.Ok ? "ok " + p.Found : "MISSING" + (p.Note != null ? " (" + p.Note + ")" : "")) + "  [winget: " + Prereqs.WingetCommand(p) + "]");
             sb.AppendLine("winget: " + (Prereqs.WingetExe() ?? "not found"));

@@ -1,6 +1,62 @@
 # Bring-up notes
 
 Dated log of what was tried and where each run stopped. Newest first.
+## 2026-11-12 — Language edition: Europe (opt-in, issue #1: Russian), and a non-US copy refused at the file check (issue #3)
+EBOOT: BCUS98125 update 1.04 | src/infamous2_hooks.cpp (rows language_edition / language, the table write), config/ss_manifest.txt,
+ps3recomp libs/system/tests/test_sysutil_lang.c, tools/check_inputs.py, tools/extract_policy_modules.py, tools/build.ps1, launcher, README.md
+- **Asked:** after 2026-11-11 (a US PS3 set to Russian plays this disc in English), the user chose an opt-in way to the
+  game's European languages on the US copy.
+- **Where, as narrow as it goes:** the game picks its language in 0x9D9DC from the list of its edition in the table at
+  0x930A00 ({count, list} per edition; disc EBOOT 0x8D09D0). That table has exactly one reader: 0x9D9DC, through the TOC
+  slot 0x9A10F4 (every lifted function scanned for loads of it and of the table itself: one hit). So with
+  `language_edition = europe` the port copies the table's Europe entry ({9, 0x744E54}: british, french, italian,
+  german, spanish, dutch, polish, portuguese, russian) over the US entry ({4, 0x744E44}), once, after the EBOOT is
+  loaded and before the game runs -- checked first, and nothing is written when the four words are not this EBOOT's.
+  The edition word (+0 of the platform object, from TITLE_ID in 0x9DFF8), TITLE_ID itself and what is derived from
+  them (+4 = 0x9D91C(edition), +0x50 = 0x9D828(edition) -> the per-edition strings at 0x744C52 "UP9000-BCUS98125_00",
+  the content ids of DLC / PSN; the splash movie; save directory names from TITLE_ID; trophies through sceNpTrophy) are
+  not touched. Seen in the Europe runs: the DLC checks still ask for UP9000-BCUS98125_00-..., the splash is still
+  splash_america.bik, the saves are BCUS98125_INFAMOUS2_0, and apart from the language lines the logs match a US run.
+  `us` (the default) writes nothing: the v0.1.3 path (a default run against a v0.1.3 one: the same packs and the same
+  options / cellSysutil / cellGame / cellSaveData / file lines, apart from lines other threads cut into).
+- **Rows:** `language_edition = us | europe` (System > Language, restart, OPT_F_ENHANCEMENT, env IF2_LANGUAGE_EDITION,
+  alias edition; "US (original) / Europe (adds Russian, German, Italian, Polish, ...)"). It is registered first and
+  picks the `language` row's list for the session: US auto | english_us | french | spanish | portuguese (as before);
+  Europe auto | english_uk | french | italian | german | spanish | dutch | polish | portuguese | russian. English (UK)
+  is the system language 18, which the game reads as none: the list's first entry, british_text with the English
+  voices -- what a UK PS3 gets. A saved language the edition does not offer is not one of the row's values: the store
+  logs "options.ini:N: language = russian is not a value of this setting: ignored" and the row is Auto. Auto with
+  Europe: Russian Windows -> russian, en-US -> english_uk (the sibling), pt-BR -> portuguese, Turkish / Japanese ->
+  english_us, which the game pairs with british. Turkish is not in the European list (its own edition, BCES01229, has
+  it alone, and system Turkish counts as none), nor are Japanese, Korean, Chinese: not offered.
+- **In game (checkpoint 03 boat polycut, then the pause menu and PC Settings > System; scratch options.ini, caches, states;
+  PLAY_ISSUES=0):** every European language boots with its packs: russian / russian_text, english / british_text,
+  french, italian, german, spanish (the European pack, not latino), dutch, polish, portuguese (not brazilian), each with
+  its _text from the update; one GetSystemParamInt(LANG) per run. Frame dumps: the polycut's subtitles and the pause
+  menu in each language in the game's font, Cyrillic (СПОСОБНОСТИ, ПАРАМЕТРЫ ...; "По-твоему, было бы "проще" сжечь кучу
+  людей заживо?!") and Polish (ę, ż, ł) included, no missing-glyph boxes; PC Settings shows LANGUAGE EDITION * EUROPE
+  and LANGUAGE * RUSSIAN. Russian voice: russian.psarc (8656 /dialogue/*.ogg) is the only voice pack the run opens.
+  Env IF2_LANGUAGE_EDITION=europe with Auto on an en-US Windows: english_uk -> british_text.
+- **Saves both ways:** a save the game wrote in a Russian / Europe session (BCUS98125_INFAMOUS2_0, its DETAIL in
+  Russian) boots in a US session (English), a US-session save boots in a Europe one (German); a save state made in a
+  Europe / Russian session loads in a US session, one made in a US session loads in a Europe / Polish one (the loaded
+  moment keeps its language: guest memory; the table write is guest memory too and harmless there -- 0x9D9DC runs once,
+  at boot).
+- **Tests:** test_sysutil_lang 83 checks (11 new: auto against the European list); manifest gate 4082 statics, 0
+  unclassified (g_lang_europe BOOT).
+- **Issue #3 (a European disc got to step 6 and failed in extract_policy_modules: "Wws_Job module: the bytes at
+  0x008E5B00 are not the known module"):** check_inputs.py warned only, for a title id other than BCUS98125 and for an
+  unknown EBOOT SHA-1. Both are errors now, naming the edition found (the game's own SKU list: BCES01143 Europe,
+  BCES01144 UK, BCES01229 Turkey, BCAS20181 Asia, BCJS30075 Japan, the PSN demos), saying that only BCUS98125 with
+  update 1.04 (or its 1.00 disc EBOOT) is supported and pointing to Language edition: Europe for the European
+  languages; IF2_ALLOW_UNKNOWN_EBOOT=1 turns them back into warnings (development). The launcher's game-files check
+  says the same before any step ([x], or [!] with the variable; also in --detect-out with --disc / --update).
+  extract_policy_modules.py ends a failure with what it means (not a BCUS98125 1.00 / 1.04 EBOOT, US only) and the jobs
+  step's error points at those lines. Tried: a copy of the 1.04 EBOOT with one byte flipped and a PARAM.SFO saying
+  BCES01143 (both in scratch): check_inputs exit 1 with the message, exit 0 with the override; the launcher's check
+  [x] / [!] the same; extract_policy_modules on the disc EBOOT posing as 1.04 prints the user's line and then the new
+  explanation, exit 1; the real US files still pass, analysis/inputs.json byte-identical.
+
 ## 2026-11-11 — Issue #2: the build and the game from a folder with spaces (and a deep or non-ASCII folder)
 CMakeLists.txt, tools/build.ps1, tools/run.ps1, src/stubs.cpp, ps3recomp libs/system/cellGame.c, launcher, README.md
 - **Reported:** "Compile the game" failed with `RC1107: invalid usage` when the folder had a space. Cause: the target's

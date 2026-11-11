@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -29,12 +30,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # Retail inFamous 2 releases seen in public databases. Others may exist
-# (Collection / Greatest Hits re-releases); an unknown ID is a warning, not an error.
+# (Collection / Greatest Hits re-releases). Only BCUS98125 is supported: see SUPPORT below.
 KNOWN_IDS = {
     "BCUS98125": "inFamous 2 (North America, disc) -- reference target",
     "BCES01143": "inFamous 2 (Europe, disc)",
     "BCES01144": "inFamous 2 (UK, disc)",
 }
+# Every edition the game itself knows (its SKU list, 1.04 EBOOT 0x744B02), for the message below.
+EDITIONS = {
+    "BCUS98125": "North America", "BCES01143": "Europe", "BCES01144": "UK", "BCES01229": "Turkey",
+    "BCAS20181": "Asia", "BCJS30075": "Japan", "NPUA70156": "North America, PSN demo",
+    "NPEA90095": "Europe, PSN demo", "NPEA90096": "Europe, PSN demo", "NPHA80154": "Asia, PSN demo",
+    "NPJA90193": "Japan, PSN demo", "NPUA70154": "North America, PSN demo", "NPUA70146": "North America, PSN demo",
+}
+# An EBOOT that is not one of KNOWN_EBOOTS is an error: the title hooks hold the addresses of those two
+# builds alone, and another EBOOT fails later and less clearly (issue #3: "Wws_Job module: the bytes at
+# 0x008E5B00 are not the known module" in step 6). IF2_ALLOW_UNKNOWN_EBOOT=1 makes it a warning (development).
+SUPPORT = ("This build supports only the US edition, BCUS98125, with title update 1.04 (or its 1.00 disc "
+           "EBOOT). Russian, German, Italian, Polish and the other European languages are available on a US "
+           "copy: PC Settings > System > Language edition: Europe.")
+ALLOW_UNKNOWN_ENV = "IF2_ALLOW_UNKNOWN_EBOOT"
+
+
+def edition_of(title_id: str) -> str:
+    name = EDITIONS.get(title_id)
+    return f"{title_id} ({name})" if name else f"{title_id} (not an edition this port knows)"
 
 EM_PPC64 = 21
 ET_SCE_PPURELEXEC = 0xFFA4   # a PRX
@@ -138,10 +158,14 @@ def main() -> int:
     title_id = str(sfo.get("TITLE_ID", "?"))
     print(f"[i] PARAM.SFO: {sfo.get('TITLE', '?')}  id={title_id}  "
           f"disc version={sfo.get('VERSION', '?')}  app_ver={sfo.get('APP_VER', '?')}")
-    if title_id in KNOWN_IDS:
+    allow_unknown = os.environ.get(ALLOW_UNKNOWN_ENV, "") == "1"
+    if title_id == "BCUS98125":
         print(f"[ok] {KNOWN_IDS[title_id]}")
     else:
-        warnings.append(f"title id {title_id} is not a known inFamous 2 release")
+        (warnings if allow_unknown else errors).append(
+            f"your disc is {edition_of(title_id)}. {SUPPORT}"
+            + (f" ({ALLOW_UNKNOWN_ENV}=1: going on anyway -- the pipeline will likely fail later.)" if allow_unknown
+               else f" (Developers: {ALLOW_UNKNOWN_ENV}=1 makes this a warning.)"))
 
     disc_eboot = find_eboot(disc / "USRDIR")
     if not disc_eboot:
@@ -174,8 +198,13 @@ def main() -> int:
             if digest in KNOWN_EBOOTS:
                 print(f"[ok] {KNOWN_EBOOTS[digest]}")
             else:
-                warnings.append("this EBOOT's SHA-1 is not a known decrypted inFamous 2 EBOOT (BCUS98125 "
-                                "disc or update 1.04): the title hooks may not match it")
+                (warnings if allow_unknown else errors).append(
+                    f"the {label} EBOOT {target.relative_to(args.game)} (SHA-1 {digest}) is not a supported "
+                    f"build: the title hooks have addresses for the BCUS98125 disc EBOOT and update 1.04 only "
+                    f"(the disc here: {edition_of(title_id)}; a damaged or wrongly decrypted dump also lands "
+                    f"here). {SUPPORT}"
+                    + (f" ({ALLOW_UNKNOWN_ENV}=1: going on anyway.)" if allow_unknown
+                       else f" (Developers: {ALLOW_UNKNOWN_ENV}=1 makes this a warning.)"))
             result.update(eboot=str(target.resolve()), eboot_source=label,
                           eboot_sha1=digest, update_app_ver=upd_ver)
         if target is upd_eboot:

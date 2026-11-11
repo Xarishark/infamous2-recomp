@@ -103,6 +103,13 @@ def main() -> int:
         bad += len(LIBSRE_MODULES)
 
     print(f"{ok} policy module(s) written, {bad} left out")
+    if bad:
+        sha = inputs.get("eboot_sha1", "?")
+        print(f"[x] the policy modules are taken from known places in the BCUS98125 EBOOTs (disc 1.00 and update "
+              f"1.04); this EBOOT (title {inputs.get('title_id', '?')}, SHA-1 {sha}) does not hold them there, so "
+              f"it is not one of those builds. This port supports only the US edition, BCUS98125, with update "
+              f"1.04 -- tools/check_inputs.py says so unless IF2_ALLOW_UNKNOWN_EBOOT=1 was set. For the European "
+              f"languages on a US copy: PC Settings > System > Language edition: Europe.")
     return 0 if bad == 0 else 1
 
 

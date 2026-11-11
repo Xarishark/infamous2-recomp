@@ -25853,10 +25853,10 @@ index 0000000..8eed0e6
 +}
 diff --git a/libs/system/tests/test_sysutil_lang.c b/libs/system/tests/test_sysutil_lang.c
 new file mode 100644
-index 0000000..bd0201c
+index 0000000..c1126c0
 --- /dev/null
 +++ b/libs/system/tests/test_sysutil_lang.c
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,161 @@
 +/*
 + * ps3recomp - the system language (libs/system/cellSysutil.c): the PS3
 + * language keys, the Windows UI language -> PS3 language map, the auto pick
@@ -25988,6 +25988,19 @@ index 0000000..bd0201c
 +    CHECK(cellSysutil_lang_auto(0x0411, v) == CELL_SYSUTIL_LANG_ENGLISH_US);
 +    CHECK(cellSysutil_lang_auto(0x0422, v) == CELL_SYSUTIL_LANG_ENGLISH_US);   /* no PS3 language */
 +    CHECK(cellSysutil_lang_auto(0x0409, NULL) == CELL_SYSUTIL_LANG_ENGLISH_US);
++    /* inFamous 2 with language_edition = europe (src/infamous2_hooks.cpp kLanguageEU) */
++    const char* const eu = "auto|english_uk|french|italian|german|spanish|dutch|polish|portuguese|russian";
++    CHECK(cellSysutil_lang_auto(0x0419, eu) == CELL_SYSUTIL_LANG_RUSSIAN);
++    CHECK(cellSysutil_lang_auto(0x0409, eu) == CELL_SYSUTIL_LANG_ENGLISH_GB);   /* US English -> the UK sibling */
++    CHECK(cellSysutil_lang_auto(0x0809, eu) == CELL_SYSUTIL_LANG_ENGLISH_GB);
++    CHECK(cellSysutil_lang_auto(0x0407, eu) == CELL_SYSUTIL_LANG_GERMAN);
++    CHECK(cellSysutil_lang_auto(0x0410, eu) == CELL_SYSUTIL_LANG_ITALIAN);
++    CHECK(cellSysutil_lang_auto(0x0415, eu) == CELL_SYSUTIL_LANG_POLISH);
++    CHECK(cellSysutil_lang_auto(0x0413, eu) == CELL_SYSUTIL_LANG_DUTCH);
++    CHECK(cellSysutil_lang_auto(0x0C0A, eu) == CELL_SYSUTIL_LANG_SPANISH);
++    CHECK(cellSysutil_lang_auto(0x0416, eu) == CELL_SYSUTIL_LANG_PORTUGUESE_PT); /* pt-BR -> Portuguese */
++    CHECK(cellSysutil_lang_auto(0x041F, eu) == CELL_SYSUTIL_LANG_ENGLISH_US);   /* Turkish: not in the list */
++    CHECK(cellSysutil_lang_auto(0x0411, eu) == CELL_SYSUTIL_LANG_ENGLISH_US);
 +    /* a title that offers every language takes them as they are; one offering only Chinese S gets it for T */
 +    CHECK(cellSysutil_lang_auto(0x0419, "auto|russian|english_us") == CELL_SYSUTIL_LANG_RUSSIAN);
 +    CHECK(cellSysutil_lang_auto(0x0809, "auto|english_uk|english_us") == CELL_SYSUTIL_LANG_ENGLISH_GB);
