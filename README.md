@@ -114,10 +114,11 @@ very welcome (each session's `logs\play-*-issues.txt` records your CPU, GPU and 
 
 ## Quick start with the launcher
 
-1. Get this repository (the source archive or `git clone`) into a folder of its own, e.g.
-   `C:\Games\infamous2-recomp`, and put `inFamous2Launcher.exe` in that folder (it comes with a release;
-   or build it in a second with `tools\build_launcher.cmd`, which uses the C# compiler built into
-   Windows).
+1. Download **`inFamous2Recomp-<version>-windows.zip`** from the
+   [latest release](https://github.com/bhuiyah/infamous2-recomp/releases/latest) and extract it to a folder
+   of its own, e.g. `C:\Games\inFamous2Recomp`. It holds this repository with `inFamous2Launcher.exe`
+   already inside (no game files). Or `git clone` the repository and build the launcher in a second with
+   `tools\build_launcher.cmd` (it uses the C# compiler built into Windows).
 2. Run **`inFamous2Launcher.exe`**. The first time, it asks for your files:
    - the **disc folder** (the one holding `PS3_GAME`),
    - the **update 1.04 folder** (`BCUS98125`, holding `PARAM.SFO` and `USRDIR`),
